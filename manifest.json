@@ -1,7 +1,7 @@
 {
   "manifest_version": 3,
   "name": "LinkedIn Puzzle Solver",
-  "version": "0.2.0",
+  "version": "0.2.1",
   "description": "Recognizes and solves LinkedIn logic and word puzzles locally in your browser.",
   "permissions": ["debugger"],
   "background": {
@@ -11,12 +11,14 @@
     {
       "matches": ["https://www.linkedin.com/games/*"],
       "js": ["src/bootstrap.js"],
+      "all_frames": true,
       "run_at": "document_start"
     },
     {
       "matches": ["https://www.linkedin.com/games/*"],
       "js": ["src/solvers.js", "src/content.js"],
       "css": ["src/content.css"],
+      "all_frames": true,
       "run_at": "document_idle"
     }
   ]

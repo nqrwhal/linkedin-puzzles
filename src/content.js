@@ -39,7 +39,8 @@
   }
 
   function getGame() {
-    const match = location.pathname.match(/^\/games\/(pinpoint|crossclimb|wend|queens|tango|zip|mini-sudoku|patches)(?:\/|$)/);
+    if (window.top === window && document.querySelector("iframe[src*='/games/view/']")) return null;
+    const match = location.pathname.match(/^\/games\/(?:view\/)?(pinpoint|crossclimb|wend|queens|tango|zip|mini-sudoku|patches)(?:\/|$)/);
     return match ? match[1] : null;
   }
 
@@ -589,6 +590,8 @@
   const observer = new MutationObserver(() => {
     if (location.href !== lastUrl) {
       lastUrl = location.href;
+      updatePanel();
+    } else if (!solving && getGame() !== currentGame) {
       updatePanel();
     } else if (currentGame && status?.textContent === "Waiting for the board.") {
       setStatus("Board recognized. Ready to solve.");

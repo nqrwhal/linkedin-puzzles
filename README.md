@@ -29,6 +29,8 @@ Supported games:
 
 Chrome briefly shows a debugging banner while the extension sends trusted puzzle input. The extension disconnects as soon as the solve finishes. If the solver card does not appear after updating the extension, reload both the extension on `chrome://extensions` and the game tab.
 
+For incognito play, enable **Allow in Incognito** on the extension's Details page. The solver card supports LinkedIn's iframe-based incognito layout, though word games may not expose enough puzzle data there to solve.
+
 The extension does not make its own network requests, collect data, or send puzzle contents anywhere. It reads the puzzle data already delivered in LinkedIn's page and requests Chrome's `debugger` permission solely to create trusted mouse and keyboard input while a solve is running. The debugging session attaches when you press **Solve puzzle**, detaches immediately afterward, and has a 30-second safety timeout.
 
 ## How it works

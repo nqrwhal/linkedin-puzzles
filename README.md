@@ -27,11 +27,11 @@ Supported games:
 2. Wait for the **Puzzle Solver** card to say the board is recognized.
 3. Click **Solve puzzle** and keep the game tab open until the card says **Solved!**.
 
-Chrome briefly shows a debugging banner while the extension sends trusted puzzle input. The extension disconnects as soon as the solve finishes. If the solver card does not appear after updating the extension, reload both the extension on `chrome://extensions` and the game tab.
+Chrome briefly shows a debugging banner when a game opens and while the extension sends trusted puzzle input. The initial connection reads only LinkedIn's own puzzle response and disconnects within eight seconds; solve input disconnects as soon as the solve finishes. If the solver card does not appear after updating the extension, reload both the extension on `chrome://extensions` and the game tab.
 
 For incognito play, enable **Allow in Incognito** on the extension's Details page. The solver card supports LinkedIn's iframe-based incognito layout, though word games may not expose enough puzzle data there to solve.
 
-The extension does not make its own network requests, collect data, or send puzzle contents anywhere. It reads the puzzle data already delivered in LinkedIn's page and requests Chrome's `debugger` permission solely to create trusted mouse and keyboard input while a solve is running. The debugging session attaches when you press **Solve puzzle**, detaches immediately afterward, and has a 30-second safety timeout.
+The extension does not make its own network requests, collect data, or send puzzle contents anywhere. It keeps only matching puzzle data from LinkedIn's current page in memory. Chrome's `debugger` permission is used to read that already-delivered response and create trusted mouse and keyboard input; capture has an eight-second timeout and solve input has a 30-second safety timeout.
 
 ## How it works
 
@@ -40,10 +40,10 @@ The extension reads the same accessibility labels and cell metadata that LinkedI
 - Queens: region-aware backtracking
 - Tango: binary constraint propagation and search
 - Zip: ordered Hamiltonian-path search with connectivity pruning
-- Mini Sudoku: irregular-region Sudoku search
+- Mini Sudoku: current-grid detection and region-aware Sudoku search
 - Patches: rectangle enumeration and exact cover
 - Pinpoint: accepted category extraction from the page's bootstrap data
-- Crossclimb: clue-answer extraction, ladder ordering, and final-pair entry
+- Crossclimb: visible clue-to-row matching, ladder ordering, and final-pair entry
 - Wend: exact answer paths from the page's delivered grid data
 
 ## Development

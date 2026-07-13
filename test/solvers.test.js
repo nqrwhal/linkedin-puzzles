@@ -35,6 +35,16 @@ test("Wend extracts escaped grid letters and exact non-overlapping paths", () =>
   });
 });
 
+test("Wend preserves today's blocked 5x5 cells and every delivered word path", () => {
+  const source = String.raw`{\"wendGamePuzzle\":{\"puzzleLetters\":[\"N\",\"T\",\"\",\"O\",\"V\",\"A\",\"E\",\"R\",\"N\",\"A\",\"L\",\"\",\"\",\"\",\"L\",\"C\",\"I\",\"U\",\"I\",\"C\",\"Y\",\"\",\"Q\",\"\",\"K\"],\"solutionWords\":[{\"sequencingIndex\":[16,15,20]},{\"sequencingIndex\":[3,4,9,14]},{\"sequencingIndex\":[22,17,18,19,24]},{\"sequencingIndex\":[10,5,0,1,6,7,8]}],\"gridRows\":5,\"gridCols\":5}}`;
+  assert.deepEqual(parseWendPuzzle(source), {
+    rows: 5,
+    cols: 5,
+    letters: ["N", "T", "", "O", "V", "A", "E", "R", "N", "A", "L", "", "", "", "L", "C", "I", "U", "I", "C", "Y", "", "Q", "", "K"],
+    paths: [[16, 15, 20], [3, 4, 9, 14], [22, 17, 18, 19, 24], [10, 5, 0, 1, 6, 7, 8]],
+  });
+});
+
 test("Queens places one queen per row, column, and region without touching", () => {
   const size = 4;
   const regions = Array.from({ length: size * size }, (_, index) => index % size);
@@ -85,6 +95,16 @@ test("Mini Sudoku solves an irregular-region-compatible Latin grid", () => {
   for (let region = 0; region < size; region += 1) assert.deepEqual(new Set(grid.filter((_, index) => regions[index] === region)), expected);
 });
 
+test("Mini Sudoku solves today's 6x6 Cobweb board", () => {
+  const size = 6;
+  const regions = Array.from({ length: 36 }, (_, index) => Math.floor(Math.floor(index / size) / 2) * 2 + Math.floor((index % size) / 3));
+  const givens = { 1: 6, 4: 4, 6: 5, 8: 3, 9: 2, 11: 6, 13: 2, 16: 3, 19: 1, 22: 2, 24: 4, 26: 2, 27: 1, 29: 3, 31: 3, 34: 5 };
+  const grid = solveSudoku({ size, regions, givens });
+  const expected = new Set([1, 2, 3, 4, 5, 6]);
+  for (let row = 0; row < size; row += 1) assert.deepEqual(new Set(grid.slice(row * size, (row + 1) * size)), expected);
+  for (let col = 0; col < size; col += 1) assert.deepEqual(new Set(Array.from({ length: size }, (_, row) => grid[row * size + col])), expected);
+});
+
 test("Patches exactly covers the live 8x8 clue layout", () => {
   const clues = [
     { index: 2, shape: "any", area: 6 },
@@ -129,6 +149,24 @@ test("Zip finds a Hamiltonian path through the live ordered clues", () => {
   }
   let previousPosition = -1;
   for (let number = 1; number <= 12; number += 1) {
+    const position = path.indexOf(clues[number]);
+    assert.ok(position > previousPosition);
+    previousPosition = position;
+  }
+});
+
+test("Zip solves today's 7x7 route without dropping a checkpoint", () => {
+  const clues = { 1: 28, 2: 0, 3: 20, 4: 48, 5: 36, 6: 12 };
+  const path = solveZip({ rows: 7, cols: 7, clues, timeoutMs: 20000 });
+  assert.equal(path.length, 49);
+  assert.equal(new Set(path).size, 49);
+  for (let index = 1; index < path.length; index += 1) {
+    const previous = path[index - 1];
+    const current = path[index];
+    assert.equal(Math.abs(Math.floor(previous / 7) - Math.floor(current / 7)) + Math.abs((previous % 7) - (current % 7)), 1);
+  }
+  let previousPosition = -1;
+  for (let number = 1; number <= 6; number += 1) {
     const position = path.indexOf(clues[number]);
     assert.ok(position > previousPosition);
     previousPosition = position;

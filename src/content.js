@@ -175,8 +175,28 @@
     return [...new Set([...captured, ...live])];
   }
 
+  async function parsePuzzleData(parser) {
+    let lastError;
+    for (let attempt = 0; attempt < 8; attempt += 1) {
+      let networkSources = [];
+      try {
+        const response = await chrome.runtime.sendMessage({ type: "lls-puzzle-sources" });
+        networkSources = response?.sources || [];
+      } catch {
+        // Bootstrap sources still support pages that embed their puzzle data.
+      }
+      try {
+        return parser([...new Set([...bootstrapSources(), ...networkSources])]);
+      } catch (error) {
+        lastError = error;
+      }
+      await delay(125);
+    }
+    throw lastError;
+  }
+
   async function solvePinpointGame() {
-    const solutions = solvers.parsePinpointSolutions(bootstrapSources());
+    const solutions = await parsePuzzleData(solvers.parsePinpointSolutions);
     if (/\/games\/pinpoint\/results\/?$/.test(location.pathname)) return;
     const input = document.querySelector("input[placeholder='Guess the category...'], input[aria-label='Guess the category...']");
     if (!input) {
@@ -185,7 +205,9 @@
     }
     setStatus("Submitting the category…", "working");
     await replaceInputText(input, solutions[0]);
-    await pressKey("Enter", "Enter", 13);
+    const guessButton = [...document.querySelectorAll("main button")].find((button) => (button.textContent || "").trim() === "Guess");
+    if (guessButton) await clickElement(guessButton);
+    else await pressKey("Enter", "Enter", 13);
     if (!(await waitForAcceptedSolution(4000))) throw new Error("LinkedIn did not accept the Pinpoint answer.");
   }
 
@@ -194,12 +216,23 @@
   }
 
   async function fillLetterRow(row, word) {
-    const inputs = [...row.querySelectorAll("input")];
-    if (inputs.length !== word.length) throw new Error(`Crossclimb expected ${word.length} letter boxes.`);
-    for (let index = 0; index < inputs.length; index += 1) {
-      if (((inputs[index].value || "")[0] || "").toUpperCase() === word[index]) continue;
-      await replaceInputText(inputs[index], word[index]);
-      await delay(22);
+    const label = row.getAttribute("aria-label") || row.querySelector("input")?.getAttribute("aria-label") || "";
+    const rowNumber = label.match(/row\s+(\d+)/i)?.[1];
+    for (let index = 0; index < word.length; index += 1) {
+      // Crossclimb replaces a row's inputs after every keystroke. Re-query the
+      // live row so later letters never target detached React elements.
+      const liveRow = rowNumber ? document.querySelector(`main [aria-label^='Row ${rowNumber},']`) : row;
+      const inputs = [...(liveRow || row).querySelectorAll("input")];
+      if (inputs.length !== word.length) throw new Error(`Crossclimb expected ${word.length} letter boxes.`);
+      const current = ((inputs[index].value || "")[0] || "").toUpperCase();
+      if (current === word[index]) continue;
+      await clickElement(inputs[index]);
+      if (current) {
+        await pressKey("a", "KeyA", 65, /Mac|iPhone|iPad/.test(navigator.platform) ? 4 : 2);
+        await pressKey("Backspace", "Backspace", 8);
+      }
+      await insertText(word[index]);
+      await delay(60);
     }
   }
 
@@ -225,9 +258,9 @@
 
   async function solveCrossclimbGame() {
     if (/\/games\/crossclimb\/results\/?$/.test(location.pathname)) return;
-    const rungs = solvers.parseCrossclimbRungs(bootstrapSources());
+    const rungs = await parsePuzzleData(solvers.parseCrossclimbRungs);
     const ordered = rungs.slice().sort((a, b) => a.solutionRungIndex - b.solutionRungIndex);
-    const middleInClueOrder = rungs.filter((rung) => rung.solutionRungIndex > 0 && rung.solutionRungIndex < ordered.length - 1);
+    const middleRungs = rungs.filter((rung) => rung.solutionRungIndex > 0 && rung.solutionRungIndex < ordered.length - 1);
 
     const existingInputs = [...document.querySelectorAll("main input")];
     if (existingInputs.length && existingInputs.every((input) => input.disabled)) return;
@@ -237,11 +270,29 @@
     }
 
     setStatus("Answering the clues…", "working");
-    if (rows.length !== middleInClueOrder.length) throw new Error("Crossclimb clue count does not match its puzzle data.");
+    if (rows.length !== middleRungs.length) throw new Error("Crossclimb clue count does not match its puzzle data.");
+    const usedClues = new Set();
     for (let index = 0; index < rows.length; index += 1) {
-      await fillLetterRow(rows[index], middleInClueOrder[index].word);
+      rows = [...document.querySelectorAll(".crossclimb__guess--middle")];
+      const row = rows[index];
+      const input = row?.querySelector("input");
+      if (!input) throw new Error("A Crossclimb clue row is missing its letter boxes.");
+      await clickElement(input);
+      await delay(80);
+      const visibleText = (document.querySelector("main")?.innerText || "").replace(/\s+/g, " ");
+      const rung = middleRungs
+        .filter((candidate) => !usedClues.has(candidate.clue))
+        .sort((a, b) => b.clue.length - a.clue.length)
+        .find((candidate) => candidate.clue && visibleText.includes(candidate.clue.replace(/\s+/g, " ")));
+      if (!rung) throw new Error(`Crossclimb could not match the clue shown for row ${index + 2}.`);
+      usedClues.add(rung.clue);
+      await fillLetterRow(row, rung.word);
       await delay(120);
     }
+    // LinkedIn validates the clue answers on a short debounce. Reordering too
+    // soon makes correct words look wrong because they move to another clue
+    // before that validation finishes.
+    await delay(1000);
 
     setStatus("Ordering the word ladder…", "working");
     const desired = ordered.slice(1, -1).map((rung) => rung.word);
@@ -292,14 +343,14 @@
   }
 
   async function solveWendGame() {
-    const puzzle = solvers.parseWendPuzzle(bootstrapSources());
+    const puzzle = await parsePuzzleData(solvers.parseWendPuzzle);
     if (/\/games\/wend\/results\/?$/.test(location.pathname) || document.querySelector("a[href*='/games/wend/results']")) return;
     const cells = findWendGrid(puzzle);
     setStatus("Weaving through the words…", "working");
     for (const path of puzzle.paths) {
       const elements = path.map((index) => cells[index]);
       if (elements.some((element) => !element)) throw new Error("A Wend solution path leaves the grid.");
-      await dragThrough(elements);
+      await dragThrough(elements, { stepsPerCell: 3, stepDelay: 10 });
       if (/\/results\/?$/.test(location.pathname)) return;
     }
     if (!(await waitForAcceptedSolution(4000)) && !document.querySelector("a[href*='/games/wend/results']")) {
@@ -415,26 +466,71 @@
     for (let index = 0; index < cells.length; index += 1) {
       const row = Math.floor(index / size);
       const col = index % size;
-      if (col + 1 < size && !cells[index].classList.contains("sudoku-cell-wall-right") && !cells[index + 1].classList.contains("sudoku-cell-wall-left")) join(index, index + 1);
-      if (row + 1 < size && !cells[index].classList.contains("sudoku-cell-wall-bottom") && !cells[index + size].classList.contains("sudoku-cell-wall-top")) join(index, index + size);
+      const style = getComputedStyle(cells[index]);
+      const rightStyle = col + 1 < size ? getComputedStyle(cells[index + 1]) : null;
+      const bottomStyle = row + 1 < size ? getComputedStyle(cells[index + size]) : null;
+      const wallRight = cells[index].classList.contains("sudoku-cell-wall-right")
+        || cells[index + 1]?.classList.contains("sudoku-cell-wall-left")
+        || parseFloat(style.borderRightWidth) > 1.5
+        || parseFloat(rightStyle?.borderLeftWidth || "0") > 1.5;
+      const wallBottom = cells[index].classList.contains("sudoku-cell-wall-bottom")
+        || cells[index + size]?.classList.contains("sudoku-cell-wall-top")
+        || parseFloat(style.borderBottomWidth) > 1.5
+        || parseFloat(bottomStyle?.borderTopWidth || "0") > 1.5;
+      if (col + 1 < size && !wallRight) join(index, index + 1);
+      if (row + 1 < size && !wallBottom) join(index, index + size);
     }
     const labels = new Map();
-    return parent.map((_, index) => {
+    const regions = parent.map((_, index) => {
       const root = find(index);
       if (!labels.has(root)) labels.set(root, labels.size);
       return labels.get(root);
     });
+    if (labels.size === size && [...labels.keys()].every((root) => regions.filter((region) => region === labels.get(root)).length === size)) {
+      return regions;
+    }
+    // LinkedIn's current Mini Sudoku uses the standard 2x3 six-cell boxes,
+    // even when its CSS no longer marks each wall on the cell itself.
+    if (size === 6) return cells.map((_, index) => Math.floor(Math.floor(index / size) / 2) * 2 + Math.floor((index % size) / 3));
+    return regions;
+  }
+
+  function findSudokuCells(size = 6) {
+    const legacy = [...document.querySelectorAll(".sudoku-cell[data-cell-idx]")]
+      .sort((a, b) => Number(a.dataset.cellIdx) - Number(b.dataset.cellIdx));
+    if (legacy.length) return legacy;
+
+    const candidates = [];
+    for (const container of document.querySelectorAll("main div")) {
+      const children = [...container.children];
+      let cells = [];
+      if (children.length === size * size) cells = children;
+      else if (children.length === size && children.every((row) => row.children.length === size)) {
+        cells = children.flatMap((row) => [...row.children]);
+      }
+      if (cells.length !== size * size) continue;
+      const values = cells.map((cell) => (cell.textContent || "").trim());
+      if (!values.every((value) => value === "" || /^[1-6]$/.test(value))) continue;
+      const rects = cells.map((cell) => cell.getBoundingClientRect());
+      if (rects.some((rect) => rect.width < 15 || rect.height < 15)) continue;
+      const givenCount = values.filter(Boolean).length;
+      if (givenCount < size) continue;
+      const area = container.getBoundingClientRect().width * container.getBoundingClientRect().height;
+      candidates.push({ cells, area });
+    }
+    candidates.sort((a, b) => a.area - b.area);
+    return candidates[0]?.cells || [];
   }
 
   function parseSudokuBoard() {
-    const cells = [...document.querySelectorAll(".sudoku-cell[data-cell-idx]")].sort((a, b) => Number(a.dataset.cellIdx) - Number(b.dataset.cellIdx));
+    const cells = findSudokuCells();
     if (!cells.length) throw new Error("Mini Sudoku cells are not visible yet.");
     const size = squareSize(cells.length, "Mini Sudoku");
     const givens = {};
-    for (const cell of cells) {
-      if (!cell.classList.contains("sudoku-cell-prefilled")) continue;
+    for (let index = 0; index < cells.length; index += 1) {
+      const cell = cells[index];
       const value = Number((cell.textContent || "").trim());
-      if (value) givens[Number(cell.dataset.cellIdx)] = value;
+      if (value) givens[index] = value;
     }
     return { size, cells, givens, regions: sudokuRegions(cells, size) };
   }
@@ -444,13 +540,15 @@
     const solution = solvers.solveSudoku(board);
     setStatus("Entering digits…", "working");
     for (let index = 0; index < board.cells.length; index += 1) {
-      let cell = document.querySelector(`.sudoku-cell[data-cell-idx='${index}']`);
-      if (!cell || cell.classList.contains("sudoku-cell-prefilled")) continue;
-      const current = Number((cell.querySelector(".sudoku-cell-content")?.textContent || "").trim());
+      const liveCells = findSudokuCells(board.size);
+      const cell = liveCells[index];
+      if (!cell) throw new Error("A Mini Sudoku cell disappeared while solving.");
+      const current = Number((cell.textContent || "").trim());
       if (current === solution[index]) continue;
       await clickElement(cell);
       await delay(25);
-      const numberButton = document.querySelector(`button.sudoku-input-button[data-number='${solution[index]}']`);
+      const numberButton = document.querySelector(`button.sudoku-input-button[data-number='${solution[index]}']`)
+        || [...document.querySelectorAll("main button")].find((button) => (button.textContent || "").trim() === String(solution[index]));
       if (!numberButton) throw new Error(`Mini Sudoku number button ${solution[index]} is missing.`);
       await clickElement(numberButton);
       await delay(30);
@@ -477,25 +575,37 @@
     return { rows: size, cols: size, cells, clues };
   }
 
-  async function dragThrough(elements) {
+  async function dragThrough(elements, { stepsPerCell = 1, stepDelay = 16 } = {}) {
     const centers = elements.map((element) => {
       const rect = element.getBoundingClientRect();
       return { x: rect.left + rect.width / 2, y: rect.top + rect.height / 2 };
     });
     const start = elements[0];
     const startRect = start.getBoundingClientRect();
-    const pressPoint = { x: startRect.left + 5, y: startRect.top + 5 };
-    const thresholdPoint = { x: startRect.right - 5, y: startRect.bottom - 5 };
+    const nudge = Math.max(4, Math.min(8, Math.min(startRect.width, startRect.height) * 0.15));
+    const pressPoint = { x: centers[0].x - nudge, y: centers[0].y - nudge };
+    const thresholdPoint = { x: centers[0].x + nudge, y: centers[0].y + nudge };
     await mouseStep(start, "mouseMoved", pressPoint, 0);
     await mouseStep(start, "mousePressed", pressPoint, 1);
-    await delay(14);
+    await delay(stepDelay);
     // LinkedIn's grid starts a drag from offsetX/offsetY, so deliberately
-    // cross the drag threshold while keeping the same cell as the target.
+    // cross the drag threshold near the center of the same cell. Staying
+    // away from its corners prevents an accidental neighboring-cell visit.
     await mouseStep(start, "mouseMoved", thresholdPoint, 1);
-    await delay(14);
+    await delay(stepDelay);
+    await mouseStep(start, "mouseMoved", centers[0], 1);
+    await delay(stepDelay);
     for (let index = 1; index < elements.length; index += 1) {
-      await mouseStep(elements[index], "mouseMoved", centers[index], 1);
-      await delay(16);
+      const from = centers[index - 1];
+      const to = centers[index];
+      for (let step = 1; step <= stepsPerCell; step += 1) {
+        const point = {
+          x: from.x + ((to.x - from.x) * step) / stepsPerCell,
+          y: from.y + ((to.y - from.y) * step) / stepsPerCell,
+        };
+        await mouseStep(elements[index], "mouseMoved", point, 1);
+        await delay(stepDelay);
+      }
     }
     const end = elements[elements.length - 1];
     await mouseStep(end, "mouseReleased", centers[centers.length - 1], 0);
@@ -542,7 +652,7 @@
     setStatus("Drawing the path…", "working");
     const elements = path.map((index) => document.querySelector(`[data-testid='cell-${index}'][data-cell-idx]`));
     if (elements.some((element) => !element)) throw new Error("A Zip path cell is missing.");
-    await dragThrough(elements);
+    await dragThrough(elements, { stepsPerCell: 3, stepDelay: 10 });
     if (!(await waitForAcceptedSolution())) throw new Error("LinkedIn did not accept the Zip path.");
   }
 

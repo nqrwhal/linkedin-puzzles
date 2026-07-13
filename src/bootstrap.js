@@ -3,6 +3,12 @@
 
   if (globalThis.LinkedInPuzzleBootstrap) return;
 
+  if (window.top === window) {
+    chrome.runtime.sendMessage({ type: "lls-capture-start" }).catch(() => {
+      // Puzzle solving can still use bootstrap data if early capture is unavailable.
+    });
+  }
+
   const sources = [];
   const seen = new Set();
   const markers = [
@@ -18,6 +24,11 @@
     if (seen.has(text)) return;
     seen.add(text);
     sources.push(text);
+    if (window.top === window) {
+      chrome.runtime.sendMessage({ type: "lls-puzzle-source", text }).catch(() => {
+        // The current frame can still parse its own retained source.
+      });
+    }
     while (sources.length > 24) {
       const removed = sources.shift();
       seen.delete(removed);
@@ -25,6 +36,10 @@
   }
 
   function inspect(node) {
+    if (node instanceof Text && node.parentElement?.matches("script, code")) {
+      remember(node.parentElement.textContent || "");
+      return;
+    }
     if (!(node instanceof Element)) return;
     if (node.matches("script, code")) remember(node.textContent || "");
     for (const element of node.querySelectorAll?.("script, code") || []) remember(element.textContent || "");
@@ -38,9 +53,15 @@
     },
   };
 
+  chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
+    if (message?.type !== "lls-bootstrap-sources") return;
+    sendResponse({ sources: globalThis.LinkedInPuzzleBootstrap.captureVisible() });
+  });
+
   const observer = new MutationObserver((records) => {
     for (const record of records) for (const node of record.addedNodes) inspect(node);
   });
   observer.observe(document, { childList: true, subtree: true });
   for (const element of document.querySelectorAll("script, code")) inspect(element);
+  document.addEventListener("DOMContentLoaded", () => globalThis.LinkedInPuzzleBootstrap.captureVisible(), { once: true });
 })();

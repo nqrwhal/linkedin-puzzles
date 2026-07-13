@@ -1,0 +1,78 @@
+#linkedin-logic-solver {
+  --lls-ink: #17221b;
+  --lls-green: #167d52;
+  --lls-paper: #f7fbf7;
+  position: fixed;
+  z-index: 2147483647;
+  top: 50%;
+  right: 18px;
+  width: 190px;
+  box-sizing: border-box;
+  transform: translateY(-50%);
+  padding: 16px;
+  border: 1px solid rgba(23, 34, 27, 0.14);
+  border-radius: 16px;
+  background: rgba(247, 251, 247, 0.96);
+  box-shadow: 0 12px 36px rgba(21, 45, 31, 0.2);
+  color: var(--lls-ink);
+  font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+  backdrop-filter: blur(12px);
+}
+
+#linkedin-logic-solver[hidden] { display: none !important; }
+
+#linkedin-logic-solver .lls__eyebrow {
+  margin-bottom: 4px;
+  color: var(--lls-green);
+  font-size: 11px;
+  font-weight: 750;
+  letter-spacing: 0.11em;
+  text-transform: uppercase;
+}
+
+#linkedin-logic-solver .lls__title {
+  margin-bottom: 13px;
+  font-size: 18px;
+  font-weight: 760;
+  line-height: 1.2;
+}
+
+#linkedin-logic-solver .lls__solve {
+  width: 100%;
+  min-height: 38px;
+  border: 0;
+  border-radius: 10px;
+  background: var(--lls-green);
+  color: white;
+  cursor: pointer;
+  font: inherit;
+  font-size: 14px;
+  font-weight: 720;
+  transition: transform 120ms ease, opacity 120ms ease, background 120ms ease;
+}
+
+#linkedin-logic-solver .lls__solve:hover { background: #116c46; }
+#linkedin-logic-solver .lls__solve:active { transform: translateY(1px); }
+#linkedin-logic-solver .lls__solve:disabled { cursor: wait; opacity: 0.58; }
+
+#linkedin-logic-solver .lls__status {
+  min-height: 31px;
+  margin-top: 10px;
+  color: #526159;
+  font-size: 12px;
+  line-height: 1.35;
+}
+
+#linkedin-logic-solver .lls__status[data-state="success"] { color: #0b7547; font-weight: 700; }
+#linkedin-logic-solver .lls__status[data-state="error"] { color: #a1342b; }
+#linkedin-logic-solver .lls__status[data-state="working"] { color: #68551c; }
+
+@media (max-width: 900px) {
+  #linkedin-logic-solver {
+    top: auto;
+    right: 12px;
+    bottom: 12px;
+    width: 174px;
+    transform: none;
+  }
+}

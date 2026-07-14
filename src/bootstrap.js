@@ -3,7 +3,8 @@
 
   if (globalThis.LinkedInPuzzleBootstrap) return;
 
-  if (window.top === window) {
+  const needsNetworkCapture = /^\/games\/(?:pinpoint|crossclimb|wend)(?:\/|$)/.test(location.pathname);
+  if (window.top === window && needsNetworkCapture) {
     chrome.runtime.sendMessage({ type: "lls-capture-start" }).catch(() => {
       // Puzzle solving can still use bootstrap data if early capture is unavailable.
     });

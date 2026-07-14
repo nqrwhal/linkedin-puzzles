@@ -77,6 +77,7 @@
     }
     panel.hidden = false;
     title.textContent = GAME_NAMES[currentGame];
+    solveButton.textContent = "Solve puzzle";
     solveButton.disabled = solving;
     if (!solving) setStatus("Board recognized. Ready to solve.");
   }
@@ -641,7 +642,67 @@
       const value = Number((cell.querySelector("[data-cell-content]")?.textContent || "").trim());
       if (value) clues[value] = Number(cell.dataset.cellIdx);
     }
-    return { rows: size, cols: size, cells, clues };
+    const blockedEdgeKeys = new Set();
+    const addBlockedEdge = (index, direction) => {
+      const row = Math.floor(index / size);
+      const col = index % size;
+      if (direction === "right" && col + 1 < size) blockedEdgeKeys.add(`${index}:${index + 1}`);
+      if (direction === "down" && row + 1 < size) blockedEdgeKeys.add(`${index}:${index + size}`);
+    };
+
+    // LinkedIn hashes the wall class names in current builds. Each cell still renders
+    // its grid background first, its optional clue second, and overlay pieces afterward.
+    // Every wall is represented by matching same-family overlays on its two neighboring
+    // cells, so pair groups whose indexes differ by one column or one row.
+    const overlayGroups = new Map();
+    for (const cell of cells) {
+      const index = Number(cell.dataset.cellIdx);
+      const hasClue = Object.values(clues).includes(index);
+      for (const overlay of [...cell.children].slice(hasClue ? 2 : 1)) {
+        const signature = overlay.className;
+        if (!signature) continue;
+        if (!overlayGroups.has(signature)) {
+          overlayGroups.set(signature, { family: overlay.classList[0], indexes: [] });
+        }
+        overlayGroups.get(signature).indexes.push(index);
+      }
+    }
+    const families = new Map();
+    for (const group of overlayGroups.values()) {
+      if (!families.has(group.family)) families.set(group.family, []);
+      families.get(group.family).push(group.indexes);
+    }
+    let inferredEdges = new Set();
+    for (const groups of families.values()) {
+      const familyEdges = new Set();
+      for (const owners of groups) {
+        for (const neighbors of groups) {
+          if (owners === neighbors || owners.length !== neighbors.length) continue;
+          const neighborSet = new Set(neighbors);
+          for (const offset of [1, size]) {
+            const matches = owners.every((index) => {
+              if (offset === 1 && index % size === size - 1) return false;
+              return neighborSet.has(index + offset);
+            });
+            if (!matches) continue;
+            for (const index of owners) familyEdges.add(`${index}:${index + offset}`);
+          }
+        }
+      }
+      if (familyEdges.size > inferredEdges.size) inferredEdges = familyEdges;
+    }
+    for (const edge of inferredEdges) blockedEdgeKeys.add(edge);
+
+    // Retain compatibility with older LinkedIn builds that used semantic classes.
+    for (const wall of document.querySelectorAll(".trail-cell-wall")) {
+      const owner = wall.closest("[data-cell-idx]");
+      const index = Number(owner?.getAttribute("data-cell-idx"));
+      if (!Number.isInteger(index) || index < 0 || index >= cells.length) continue;
+      if (wall.classList.contains("trail-cell-wall--right")) addBlockedEdge(index, "right");
+      if (wall.classList.contains("trail-cell-wall--down")) addBlockedEdge(index, "down");
+    }
+    const blockedEdges = [...blockedEdgeKeys].map((edge) => edge.split(":").map(Number));
+    return { rows: size, cols: size, cells, clues, blockedEdges };
   }
 
   async function solveZipGame() {
@@ -649,10 +710,23 @@
     setStatus("Finding the path…", "working");
     await nextFrame();
     const path = solvers.solveZip(board);
-    setStatus("Drawing the path…", "working");
+    setStatus("Entering the path…", "working");
     const elements = path.map((index) => document.querySelector(`[data-testid='cell-${index}'][data-cell-idx]`));
     if (elements.some((element) => !element)) throw new Error("A Zip path cell is missing.");
-    await dragThrough(elements, { stepsPerCell: 3, stepDelay: 10 });
+    await clickElement(elements[0]);
+    await delay(80);
+    const directions = {
+      [-board.cols]: ["ArrowUp", "ArrowUp", 38],
+      [board.cols]: ["ArrowDown", "ArrowDown", 40],
+      [-1]: ["ArrowLeft", "ArrowLeft", 37],
+      [1]: ["ArrowRight", "ArrowRight", 39],
+    };
+    for (let index = 1; index < path.length; index += 1) {
+      const direction = directions[path[index] - path[index - 1]];
+      if (!direction) throw new Error("The Zip route contains non-adjacent cells.");
+      await pressKey(...direction);
+      await delay(45);
+    }
     if (!(await waitForAcceptedSolution())) throw new Error("LinkedIn did not accept the Zip path.");
   }
 

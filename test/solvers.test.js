@@ -172,3 +172,21 @@ test("Zip solves today's 7x7 route without dropping a checkpoint", () => {
     previousPosition = position;
   }
 });
+
+test("Zip honors walls on today's 6x6 route", () => {
+  const clues = { 1: 13, 2: 2, 3: 0, 4: 14, 5: 22, 6: 35, 7: 33, 8: 21 };
+  const blockedEdges = [
+    [2, 3], [8, 9],
+    [10, 11], [16, 17],
+    [13, 14], [13, 19], [18, 19], [24, 25],
+    [16, 22], [21, 22],
+    [26, 27], [32, 33],
+  ];
+  const expected = [
+    13, 7, 8, 2, 1, 0, 6, 12, 18, 24, 30, 31,
+    32, 26, 25, 19, 20, 14, 15, 16, 10, 9, 3, 4,
+    5, 11, 17, 23, 22, 28, 29, 35, 34, 33, 27, 21,
+  ];
+  const path = solveZip({ rows: 6, cols: 6, clues, blockedEdges, timeoutMs: 20000 });
+  assert.deepEqual(path, expected);
+});

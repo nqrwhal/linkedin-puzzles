@@ -465,7 +465,7 @@
     return solved.map(({ mask, clueIndex, area, ...rectangle }) => rectangle);
   }
 
-  function solveZip({ rows, cols, clues, timeoutMs = 12000 }) {
+  function solveZip({ rows, cols, clues, blockedEdges = [], timeoutMs = 12000 }) {
     const total = rows * cols;
     assert(total > 0 && total <= 100, "Zip board size is unsupported.");
     const checkpointNumbers = Object.keys(clues).map(Number).sort((a, b) => a - b);
@@ -475,14 +475,18 @@
 
     const checkpointAt = Array(total).fill(0);
     for (let number = 1; number <= maxCheckpoint; number += 1) checkpointAt[clues[number]] = number;
+    const blocked = new Set(blockedEdges.map(([a, b]) => `${Math.min(a, b)}:${Math.max(a, b)}`));
     const neighbors = Array.from({ length: total }, (_, index) => {
       const row = Math.floor(index / cols);
       const col = index % cols;
       const result = [];
-      if (row > 0) result.push(index - cols);
-      if (col + 1 < cols) result.push(index + 1);
-      if (row + 1 < rows) result.push(index + cols);
-      if (col > 0) result.push(index - 1);
+      const addNeighbor = (next) => {
+        if (!blocked.has(`${Math.min(index, next)}:${Math.max(index, next)}`)) result.push(next);
+      };
+      if (row > 0) addNeighbor(index - cols);
+      if (col + 1 < cols) addNeighbor(index + 1);
+      if (row + 1 < rows) addNeighbor(index + cols);
+      if (col > 0) addNeighbor(index - 1);
       return result;
     });
     const finalCell = clues[maxCheckpoint];

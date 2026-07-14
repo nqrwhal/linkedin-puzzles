@@ -1,6 +1,6 @@
 # LinkedIn Puzzle Solver
 
-A local Chrome extension that recognizes LinkedIn's current logic and word games and adds a compact **Solve puzzle** control on the right side of the page.
+A local Chrome extension that recognizes LinkedIn's current logic and word games and adds a compact solver control on the right side of the page.
 
 Supported games:
 
@@ -27,7 +27,7 @@ Supported games:
 2. Wait for the **Puzzle Solver** card to say the board is recognized.
 3. Click **Solve puzzle** and keep the game tab open until the card says **Solved!**.
 
-Chrome briefly shows a debugging banner when a game opens and while the extension sends trusted puzzle input. The initial connection reads only LinkedIn's own puzzle response and disconnects within eight seconds; solve input disconnects as soon as the solve finishes. If the solver card does not appear after updating the extension, reload both the extension on `chrome://extensions` and the game tab.
+Chrome briefly shows a debugging banner for word games and while the extension sends trusted puzzle input. The initial word-game connection reads only LinkedIn's own puzzle response and disconnects within eight seconds; solve input disconnects as soon as the solve finishes. If the solver card does not appear after updating the extension, reload both the extension on `chrome://extensions` and the game tab.
 
 For incognito play, enable **Allow in Incognito** on the extension's Details page. The solver card supports LinkedIn's iframe-based incognito layout, though word games may not expose enough puzzle data there to solve.
 
@@ -39,7 +39,7 @@ The extension reads the same accessibility labels and cell metadata that LinkedI
 
 - Queens: region-aware backtracking
 - Tango: binary constraint propagation and search
-- Zip: ordered Hamiltonian-path search with connectivity pruning
+- Zip: wall-aware ordered Hamiltonian-path search with connectivity pruning
 - Mini Sudoku: current-grid detection and region-aware Sudoku search
 - Patches: rectangle enumeration and exact cover
 - Pinpoint: accepted category extraction from the page's bootstrap data

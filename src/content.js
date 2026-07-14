@@ -257,6 +257,27 @@
     await delay(320);
   }
 
+  async function finishCrossclimb() {
+    const deadline = Date.now() + 4000;
+    while (Date.now() < deadline) {
+      if (/\/games\/crossclimb\/results\/?$/.test(location.pathname)) return true;
+      const resultsButton = [...document.querySelectorAll("main button")].find(
+        (button) => (button.textContent || "").trim() === "See results" && !button.disabled,
+      );
+      if (resultsButton) {
+        resultsButton.click();
+        const navigationDeadline = Date.now() + 4000;
+        while (Date.now() < navigationDeadline) {
+          if (/\/games\/crossclimb\/results\/?$/.test(location.pathname)) return true;
+          await delay(100);
+        }
+        return false;
+      }
+      await delay(100);
+    }
+    return false;
+  }
+
   async function solveCrossclimbGame() {
     if (/\/games\/crossclimb\/results\/?$/.test(location.pathname)) return;
     const rungs = await parsePuzzleData(solvers.parseCrossclimbRungs);
@@ -264,7 +285,10 @@
     const middleRungs = rungs.filter((rung) => rung.solutionRungIndex > 0 && rung.solutionRungIndex < ordered.length - 1);
 
     const existingInputs = [...document.querySelectorAll("main input")];
-    if (existingInputs.length && existingInputs.every((input) => input.disabled)) return;
+    if (existingInputs.length && existingInputs.every((input) => input.disabled)) {
+      if (await finishCrossclimb()) return;
+      throw new Error("LinkedIn has completed Crossclimb but did not expose its results.");
+    }
     let rows = [...document.querySelectorAll(".crossclimb__guess--middle")];
     if (!rows.length) {
       throw new Error("Crossclimb rows are not visible yet.");
@@ -327,10 +351,7 @@
     await delay(180);
     await fillLetterRow(bottomRow, ordered[ordered.length - 1].word);
     await delay(500);
-    const inputs = [...document.querySelectorAll("main input")];
-    if (!/\/results\/?$/.test(location.pathname) && (!inputs.length || !inputs.every((input) => input.disabled))) {
-      throw new Error("LinkedIn did not accept the Crossclimb ladder.");
-    }
+    if (!(await finishCrossclimb())) throw new Error("LinkedIn did not accept the Crossclimb ladder.");
   }
 
   function findWendGrid(puzzle) {

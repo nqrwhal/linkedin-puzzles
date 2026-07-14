@@ -29,7 +29,9 @@ Supported games:
 
 Chrome briefly shows a debugging banner for word games and while the extension sends trusted puzzle input. The initial word-game connection reads only LinkedIn's own puzzle response and disconnects within eight seconds; solve input disconnects as soon as the solve finishes. If the solver card does not appear after updating the extension, reload both the extension on `chrome://extensions` and the game tab.
 
-For incognito play, enable **Allow in Incognito** on the extension's Details page. The solver card supports LinkedIn's iframe-based incognito layout, though word games may not expose enough puzzle data there to solve.
+For incognito play, enable **Allow in Incognito** on the extension's Details page. The solver card supports LinkedIn's iframe-based incognito layout. For word games, the extension can read the puzzle object from LinkedIn's rendered page state when an incognito page does not expose the answer data in HTML or the network response.
+
+To keep browsing during a solve, put the puzzle in a separate Chrome window and leave that window open; a tab group only organizes tabs and does not isolate foreground focus or background throttling. After pressing **Solve puzzle**, you can switch to your normal Chrome window. The solver uses tab-targeted trusted input and mutation-driven board checks so it does not depend on rapid timers in the unfocused puzzle window.
 
 The extension does not make its own network requests, collect data, or send puzzle contents anywhere. It keeps only matching puzzle data from LinkedIn's current page in memory. Chrome's `debugger` permission is used to read that already-delivered response and create trusted mouse and keyboard input; capture has an eight-second timeout and solve input has a 30-second safety timeout.
 
@@ -45,6 +47,8 @@ The extension reads the same accessibility labels and cell metadata that LinkedI
 - Pinpoint: accepted category extraction from the page's bootstrap data
 - Crossclimb: visible clue-to-row matching, ladder ordering, and final-pair entry
 - Wend: exact answer paths from the page's delivered grid data
+
+Trusted input is grouped where LinkedIn can safely consume it: Zip first draws one continuous cell-center path and automatically retries with a verified 12 ms arrow-key stream if LinkedIn does not accept the drag; Patches uses compact trusted drag sequences with mutation-driven settling; and Crossclimb advances after React has rendered each letter or row move.
 
 ## Development
 

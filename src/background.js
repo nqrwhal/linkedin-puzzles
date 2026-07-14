@@ -9,6 +9,56 @@ const captureDocuments = new Map();
 const pendingPuzzleResponses = new Map();
 const puzzleSources = new Map();
 
+function capturePagePuzzleSource() {
+  const reactKeyPattern = /^__react(?:Props|Fiber)\$/;
+  const puzzleKeyPattern = /blueprintGamePuzzle|crossClimbGamePuzzle|wendGamePuzzle|solutionWords|puzzleLetters|rungs/;
+  const seen = new Set();
+
+  function entriesFor(value) {
+    try {
+      return Object.entries(value);
+    } catch {
+      return [];
+    }
+  }
+
+  function containsPuzzleKey(value) {
+    return entriesFor(value).some(([key]) => puzzleKeyPattern.test(key));
+  }
+
+  function findReactPuzzle(value, depth = 0) {
+    if (!value || typeof value !== "object" || depth > 24 || seen.has(value)) return null;
+    seen.add(value);
+
+    const candidates = [value.game?.puzzle, value.props?.game?.puzzle, value.puzzle];
+    for (const candidate of candidates) {
+      if (containsPuzzleKey(candidate)) return candidate;
+    }
+
+    for (const [, child] of entriesFor(value)) {
+      const puzzle = findReactPuzzle(child, depth + 1);
+      if (puzzle) return puzzle;
+    }
+    return null;
+  }
+
+  const roots = [document.querySelector("main"), document.body].filter(Boolean);
+  for (const root of roots) {
+    for (const key of Object.keys(root)) {
+      if (!reactKeyPattern.test(key)) continue;
+      const puzzle = findReactPuzzle(root[key]);
+      if (!puzzle) continue;
+      try {
+        const serialized = JSON.stringify(puzzle);
+        if (serialized && puzzleKeyPattern.test(serialized)) return serialized;
+      } catch {
+        // Ignore non-serializable framework objects and keep looking.
+      }
+    }
+  }
+  return "";
+}
+
 function clearTimer(timers, tabId) {
   const timer = timers.get(tabId);
   if (timer) clearTimeout(timer);
@@ -19,6 +69,46 @@ async function ensureAttached(tabId) {
   if (attachedTabs.has(tabId)) return;
   await chrome.debugger.attach({ tabId }, "1.3");
   attachedTabs.add(tabId);
+}
+
+function inputInterval(value) {
+  const number = Number(value);
+  return Number.isFinite(number) ? Math.max(0, Math.min(100, number)) : 0;
+}
+
+function waitForInput(ms) {
+  return ms > 0 ? new Promise((resolve) => setTimeout(resolve, ms)) : Promise.resolve();
+}
+
+async function dispatchMouseEvent(tabId, event) {
+  const { eventType, x, y, button = "none", buttons = 0, clickCount = 0 } = event || {};
+  await chrome.debugger.sendCommand({ tabId }, "Input.dispatchMouseEvent", {
+    type: eventType,
+    x,
+    y,
+    button,
+    buttons,
+    clickCount,
+  });
+}
+
+async function dispatchKey(tabId, keyEvent) {
+  const { key, code, keyCode = 0, modifiers = 0 } = keyEvent || {};
+  const common = {
+    key,
+    code,
+    modifiers,
+    windowsVirtualKeyCode: keyCode,
+    nativeVirtualKeyCode: keyCode,
+  };
+  await chrome.debugger.sendCommand({ tabId }, "Input.dispatchKeyEvent", {
+    type: "rawKeyDown",
+    ...common,
+  });
+  await chrome.debugger.sendCommand({ tabId }, "Input.dispatchKeyEvent", {
+    type: "keyUp",
+    ...common,
+  });
 }
 
 async function detachIfIdle(tabId) {
@@ -100,10 +190,22 @@ async function handleMessage(message, sender) {
 
   if (message?.type === "lls-puzzle-sources") {
     try {
-      const response = await chrome.tabs.sendMessage(tabId, { type: "lls-bootstrap-sources" }, { frameId: 0 });
+      const frameId = Number.isInteger(sender.frameId) ? sender.frameId : 0;
+      const response = await chrome.tabs.sendMessage(tabId, { type: "lls-bootstrap-sources" }, { frameId });
       for (const source of response?.sources || []) rememberPuzzleSource(tabId, source);
     } catch {
       // Network-captured data remains available when the top frame has navigated.
+    }
+    try {
+      const frameId = Number.isInteger(sender.frameId) ? sender.frameId : 0;
+      const results = await chrome.scripting.executeScript({
+        target: { tabId, frameIds: [frameId] },
+        world: "MAIN",
+        func: capturePagePuzzleSource,
+      });
+      for (const result of results || []) rememberPuzzleSource(tabId, result.result);
+    } catch {
+      // React's page-world props are an optional fallback; captured responses still work.
     }
     const cutoff = Date.now() - 15 * 60 * 1000;
     const sources = (puzzleSources.get(tabId) || []).filter((entry) => entry.capturedAt >= cutoff);
@@ -130,18 +232,16 @@ async function handleMessage(message, sender) {
     return { ok: true };
   }
 
-  if (message?.type === "lls-input-event") {
+  if (message?.type === "lls-input-events") {
     await ensureAttached(tabId);
     inputTabs.add(tabId);
-    const { eventType, x, y, button = "none", buttons = 0, clickCount = 0 } = message;
-    await chrome.debugger.sendCommand({ tabId }, "Input.dispatchMouseEvent", {
-      type: eventType,
-      x,
-      y,
-      button,
-      buttons,
-      clickCount,
-    });
+    const events = Array.isArray(message.events) ? message.events : [];
+    if (!events.length || events.length > 500) throw new Error("Chrome received an invalid puzzle mouse sequence.");
+    const intervalMs = inputInterval(message.intervalMs);
+    for (let index = 0; index < events.length; index += 1) {
+      await dispatchMouseEvent(tabId, events[index]);
+      if (index < events.length - 1) await waitForInput(intervalMs);
+    }
     armInputSafety(tabId);
     return { ok: true };
   }
@@ -159,22 +259,21 @@ async function handleMessage(message, sender) {
   if (message?.type === "lls-input-key") {
     await ensureAttached(tabId);
     inputTabs.add(tabId);
-    const { key, code, keyCode = 0, modifiers = 0 } = message;
-    const common = {
-      key,
-      code,
-      modifiers,
-      windowsVirtualKeyCode: keyCode,
-      nativeVirtualKeyCode: keyCode,
-    };
-    await chrome.debugger.sendCommand({ tabId }, "Input.dispatchKeyEvent", {
-      type: "rawKeyDown",
-      ...common,
-    });
-    await chrome.debugger.sendCommand({ tabId }, "Input.dispatchKeyEvent", {
-      type: "keyUp",
-      ...common,
-    });
+    await dispatchKey(tabId, message);
+    armInputSafety(tabId);
+    return { ok: true };
+  }
+
+  if (message?.type === "lls-input-keys") {
+    await ensureAttached(tabId);
+    inputTabs.add(tabId);
+    const keys = Array.isArray(message.keys) ? message.keys : [];
+    if (!keys.length || keys.length > 500) throw new Error("Chrome received an invalid puzzle key sequence.");
+    const intervalMs = inputInterval(message.intervalMs);
+    for (let index = 0; index < keys.length; index += 1) {
+      await dispatchKey(tabId, keys[index]);
+      if (index < keys.length - 1) await waitForInput(intervalMs);
+    }
     armInputSafety(tabId);
     return { ok: true };
   }
@@ -207,8 +306,8 @@ chrome.debugger.onEvent.addListener((source, method, params) => {
   if (method === "Network.responseReceived") {
     const url = params?.response?.url || "";
     if (!url.startsWith("https://www.linkedin.com/voyager/api/graphql")) return;
-    if (!pendingPuzzleResponses.has(tabId)) pendingPuzzleResponses.set(tabId, new Map());
-    pendingPuzzleResponses.get(tabId).set(params.requestId, url);
+    if (!pendingPuzzleResponses.has(tabId)) pendingPuzzleResponses.set(tabId, new Set());
+    pendingPuzzleResponses.get(tabId).add(params.requestId);
     return;
   }
 

@@ -6,6 +6,7 @@ const {
   parseWendPuzzle,
   solveQueens,
   solveTango,
+  tangoClickDistance,
   solveSudoku,
   solvePatches,
   solveZip,
@@ -83,6 +84,14 @@ test("Tango satisfies row, column, adjacency, and sign constraints", () => {
     for (let i = 0; i + 2 < size; i += 1) assert.ok(!(line[i] === line[i + 1] && line[i] === line[i + 2]));
   }
   for (const relation of relations) assert.equal(grid[relation.a] === grid[relation.b], relation.same);
+});
+
+test("Tango clicks follow LinkedIn's Empty to Sun to Moon cycle", () => {
+  assert.equal(tangoClickDistance(-1, 1), 1);
+  assert.equal(tangoClickDistance(-1, 0), 2);
+  assert.equal(tangoClickDistance(1, 0), 1);
+  assert.equal(tangoClickDistance(0, 1), 2);
+  assert.equal(tangoClickDistance(1, 1), 0);
 });
 
 test("Mini Sudoku solves an irregular-region-compatible Latin grid", () => {

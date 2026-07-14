@@ -309,6 +309,12 @@
     return result;
   }
 
+  function tangoClickDistance(current, target) {
+    const cycle = [-1, 1, 0];
+    assert(cycle.includes(current) && (target === 0 || target === 1), "Tango click state is invalid.");
+    return (cycle.indexOf(target) - cycle.indexOf(current) + cycle.length) % cycle.length;
+  }
+
   function solveSudoku({ size, givens, regions }) {
     assert(size > 0 && regions.length === size * size, "Sudoku board metadata is incomplete.");
     const total = size * size;
@@ -419,7 +425,7 @@
                 }
               }
               if (containsOtherClue) continue;
-              candidates.push({ clueIndex, r1, c1, r2, c2, area, mask: rectangleMask(r1, c1, r2, c2) });
+              candidates.push({ r1, c1, r2, c2, area, mask: rectangleMask(r1, c1, r2, c2) });
             }
           }
         }
@@ -462,7 +468,7 @@
     }
 
     assert(search(0n, 0), "Patches puzzle has no exact-cover solution.");
-    return solved.map(({ mask, clueIndex, area, ...rectangle }) => rectangle);
+    return solved.map(({ mask, area, ...rectangle }) => rectangle);
   }
 
   function solveZip({ rows, cols, clues, blockedEdges = [], timeoutMs = 12000 }) {
@@ -606,6 +612,7 @@
     parseWendPuzzle,
     solveQueens,
     solveTango,
+    tangoClickDistance,
     solveSudoku,
     solvePatches,
     solveZip,

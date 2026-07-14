@@ -1,9 +1,10 @@
 {
   "manifest_version": 3,
   "name": "LinkedIn Puzzle Solver",
-  "version": "0.2.4",
+  "version": "0.2.10",
   "description": "Recognizes and solves LinkedIn logic and word puzzles locally in your browser.",
-  "permissions": ["debugger"],
+  "permissions": ["debugger", "scripting"],
+  "host_permissions": ["https://www.linkedin.com/*"],
   "background": {
     "service_worker": "src/background.js"
   },

@@ -2,6 +2,7 @@
   "use strict";
 
   const solvers = globalThis.LinkedInLogicSolvers;
+  if (window.top === window && document.querySelector("iframe[src*='/games/view/']")) return;
   if (!solvers || globalThis.__linkedinLogicSolverLoaded) return;
   globalThis.__linkedinLogicSolverLoaded = true;
 
@@ -25,11 +26,56 @@
   let solveSuccessMessage = "Solved!";
   let lastUrl = location.href;
   let trustedInputActive = false;
+  let solveStartedAt = 0;
+  let solveFirstInputAt = 0;
+  let captureGame = null;
 
+  const DOM_POLL_FLOOR_MS = 40;
+  const RENDER_SETTLE_TIMEOUT_MS = 1200;
+  const PUZZLE_DATA_ATTEMPTS = 32;
+  const PUZZLE_DATA_RETRY_MS = 250;
+  const SIGNED_IN_ACTION_SETTLE_MS = 50;
+  const SIGNED_IN_COMPLETION_FLOORS_MS = {
+    pinpoint: 1800,
+    wend: 2200,
+    queens: 3200,
+    tango: 3200,
+    zip: 2800,
+    "mini-sudoku": 3600,
+  };
+  const PUZZLE_SOURCE_PATTERN = /blueprintGamePuzzle|pinpointGamePuzzle|crossClimbGamePuzzle|wendGamePuzzle|"solutions"\s*:|"solution"\s*:|"answer"\s*:|solutionWords|puzzleLetters|rungs/;
   const delay = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
   const nextFrame = () => new Promise((resolve) => requestAnimationFrame(() => requestAnimationFrame(resolve)));
 
-  async function waitUntil(predicate, timeoutMs, intervalMs = 8) {
+  function isSignedInGamePage() {
+    return window.top === window && /^\/games\/(?!view\/)/.test(location.pathname);
+  }
+
+  function saveErrorVisible() {
+    return /issue saving your game|could(?:n[’']t| not) save your game/i.test(document.body?.textContent || "");
+  }
+
+  async function waitForSignedInCompletion(game) {
+    if (!isSignedInGamePage()) return;
+    const floor = SIGNED_IN_COMPLETION_FLOORS_MS[game] || 0;
+    const remaining = floor - (Date.now() - (solveFirstInputAt || solveStartedAt));
+    if (remaining > 0) await delay(remaining);
+  }
+
+  function markTrustedInput() {
+    if (isSignedInGamePage() && !solveFirstInputAt) solveFirstInputAt = Date.now();
+  }
+
+  async function settleSignedInAction(ms = SIGNED_IN_ACTION_SETTLE_MS) {
+    if (isSignedInGamePage()) await delay(ms);
+  }
+
+  async function waitUntil(
+    predicate,
+    timeoutMs,
+    intervalMs = DOM_POLL_FLOOR_MS,
+    observeRoot = document.querySelector("main") || document.documentElement,
+  ) {
     const test = () => {
       try {
         return Boolean(predicate());
@@ -40,41 +86,60 @@
     if (test()) return true;
     return new Promise((resolve) => {
       let finished = false;
+      let checkQueued = false;
+      let observer;
+      let poll;
+      let timeout;
       const finish = (value) => {
         if (finished) return;
         finished = true;
-        observer.disconnect();
+        observer?.disconnect();
         clearInterval(poll);
         clearTimeout(timeout);
         resolve(value);
       };
       const check = () => {
+        if (finished) return;
         if (test()) finish(true);
       };
-      const observer = new MutationObserver(check);
-      observer.observe(document.documentElement, {
+      const scheduleCheck = () => {
+        if (finished || checkQueued) return;
+        checkQueued = true;
+        queueMicrotask(() => {
+          checkQueued = false;
+          check();
+        });
+      };
+      observer = new MutationObserver(scheduleCheck);
+      observer.observe(observeRoot?.isConnected ? observeRoot : document.documentElement, {
         attributes: true,
         characterData: true,
         childList: true,
         subtree: true,
       });
-      const poll = setInterval(check, intervalMs);
-      const timeout = setTimeout(() => finish(test()), timeoutMs);
+      poll = setInterval(check, Math.max(DOM_POLL_FLOOR_MS, intervalMs));
+      timeout = setTimeout(() => finish(test()), timeoutMs);
     });
   }
 
   function acceptedSolutionVisible(includeSeeResults = true) {
-    const pageText = document.body?.innerText || document.body?.textContent || "";
-    return /\/results\/?$/.test(location.pathname)
+    const pageText = document.body?.textContent || "";
+    return !saveErrorVisible() && (/\/results\/?$/.test(location.pathname)
       || pageText.includes("Puzzle complete!")
       || pageText.includes("Correct guess")
       || (includeSeeResults && pageText.includes("See results"))
       || /You[’']re crushing it!/.test(pageText)
-      || /Solved in \d+:[0-5]\d/.test(pageText);
+      || /Solved in \d+:[0-5]\d/.test(pageText));
   }
 
   async function waitForAcceptedSolution(timeoutMs = 5000, includeSeeResults = true) {
-    return waitUntil(() => acceptedSolutionVisible(includeSeeResults), timeoutMs, 50);
+    const accepted = await waitUntil(() => acceptedSolutionVisible(includeSeeResults), timeoutMs, 50);
+    if (!accepted) return false;
+    // Signed-in pages can render their local completion state just before the
+    // save request finishes. Give a late save error time to surface before the
+    // extension reports success.
+    if (isSignedInGamePage()) await delay(650);
+    return acceptedSolutionVisible(includeSeeResults);
   }
 
   function getGame() {
@@ -111,14 +176,29 @@
     createPanel();
     currentGame = getGame();
     if (!currentGame) {
+      captureGame = null;
       panel.hidden = true;
       return;
     }
     panel.hidden = false;
+    requestPuzzleCapture();
     title.textContent = GAME_NAMES[currentGame];
     solveButton.textContent = "Solve puzzle";
     solveButton.disabled = solving;
     if (!solving) setStatus("Board recognized. Ready to solve.");
+  }
+
+  function requestPuzzleCapture(force = false) {
+    if (window.top !== window) return Promise.resolve();
+    if (!["pinpoint", "crossclimb", "wend"].includes(currentGame)) {
+      captureGame = null;
+      return Promise.resolve();
+    }
+    if (!force && captureGame === currentGame) return Promise.resolve();
+    captureGame = currentGame;
+    return chrome.runtime.sendMessage({ type: "lls-capture-start" }).catch(() => {
+      // Embedded and retained page data remain available when capture cannot attach.
+    });
   }
 
   function squareSize(count, gameName) {
@@ -162,6 +242,7 @@
   async function mouseSequence(steps, intervalMs = 0) {
     if (!steps.length) return;
     if (!trustedInputActive) throw new Error("Trusted mouse input is unavailable.");
+    markTrustedInput();
     const safeInterval = Math.max(0, Math.min(100, Number(intervalMs) || 0));
     const response = await chrome.runtime.sendMessage({
       type: "lls-input-events",
@@ -191,18 +272,21 @@
 
   async function insertText(text) {
     if (!trustedInputActive) throw new Error("Trusted keyboard input is unavailable.");
+    markTrustedInput();
     const response = await chrome.runtime.sendMessage({ type: "lls-input-text", text });
     if (!response?.ok) throw new Error(response?.error || "Chrome could not type into the puzzle.");
   }
 
   async function pressKey(key, code, keyCode, modifiers = 0) {
     if (!trustedInputActive) throw new Error("Trusted keyboard input is unavailable.");
+    markTrustedInput();
     const response = await chrome.runtime.sendMessage({ type: "lls-input-key", key, code, keyCode, modifiers });
     if (!response?.ok) throw new Error(response?.error || "Chrome could not press a puzzle key.");
   }
 
   async function pressKeys(keys, intervalMs = 20) {
     if (!trustedInputActive) throw new Error("Trusted keyboard input is unavailable.");
+    markTrustedInput();
     const response = await chrome.runtime.sendMessage({
       type: "lls-input-keys",
       keys,
@@ -236,13 +320,22 @@
 
   function bootstrapSources() {
     const captured = globalThis.LinkedInPuzzleBootstrap?.captureVisible?.() || [];
-    const live = [...document.querySelectorAll("code, script")].map((element) => element.textContent || "");
+    const live = [...document.querySelectorAll("code, script")]
+      .map((element) => element.textContent || "")
+      .filter((source) => source.length <= 4 * 1024 * 1024 && PUZZLE_SOURCE_PATTERN.test(source));
     return [...new Set([...captured, ...live])];
   }
 
   async function parsePuzzleData(parser) {
     let lastError;
-    for (let attempt = 0; attempt < 8; attempt += 1) {
+    await requestPuzzleCapture(true);
+    for (let attempt = 0; attempt < PUZZLE_DATA_ATTEMPTS; attempt += 1) {
+      const localSources = bootstrapSources();
+      try {
+        return parser(localSources);
+      } catch (error) {
+        lastError = error;
+      }
       let networkSources = [];
       try {
         const response = await chrome.runtime.sendMessage({ type: "lls-puzzle-sources" });
@@ -251,11 +344,11 @@
         // Bootstrap sources still support pages that embed their puzzle data.
       }
       try {
-        return parser([...new Set([...bootstrapSources(), ...networkSources])]);
+        return parser([...new Set([...localSources, ...networkSources])]);
       } catch (error) {
         lastError = error;
       }
-      await delay(80);
+      await delay(PUZZLE_DATA_RETRY_MS);
     }
     throw lastError;
   }
@@ -270,6 +363,7 @@
     }
     setStatus("Submitting the category…", "working");
     await replaceInputText(input, solutions[0]);
+    await waitForSignedInCompletion("pinpoint");
     const guessButton = [...document.querySelectorAll("main button")].find((button) => (button.textContent || "").trim() === "Guess");
     if (guessButton) await clickElement(guessButton);
     else await pressKey("Enter", "Enter", 13);
@@ -284,7 +378,7 @@
     return rowNumber ? document.querySelector(`main [aria-label^='Row ${rowNumber},']`) || row : row;
   }
 
-  async function waitForCrossclimbLetter(row, rowNumber, index, expected, timeoutMs = 240) {
+  async function waitForCrossclimbLetter(row, rowNumber, index, expected, timeoutMs = RENDER_SETTLE_TIMEOUT_MS) {
     return waitUntil(() => {
       const liveRow = liveCrossclimbRow(row, rowNumber);
       const value = ((liveRow?.querySelectorAll("input")[index]?.value || "")[0] || "").toUpperCase();
@@ -292,7 +386,7 @@
     }, timeoutMs);
   }
 
-  async function waitForCrossclimbRowWord(rowIndex, expected, timeoutMs = 360) {
+  async function waitForCrossclimbRowWord(rowIndex, expected, timeoutMs = 1600) {
     return waitUntil(() => {
       const rows = [...document.querySelectorAll(".crossclimb__guess--middle")];
       return rowWord(rows[rowIndex]) === expected;
@@ -323,24 +417,31 @@
   }
 
   async function dragRowBefore(row, target, movingDown) {
-    const handle = row.querySelector(".crossclimb__guess-dragger__left") || row;
-    const start = handle.getBoundingClientRect();
-    const destination = target.getBoundingClientRect();
-    const from = { x: start.left + Math.min(17, start.width / 2), y: start.top + start.height / 2 };
-    const to = {
-      x: from.x,
-      y: movingDown ? destination.bottom + 8 : destination.top - 18,
-    };
-    const steps = [
-      { eventType: "mouseMoved", point: from, buttons: 0 },
-      { eventType: "mousePressed", point: from, buttons: 1 },
-    ];
-    for (let step = 1; step <= 5; step += 1) {
-      const point = { x: from.x, y: from.y + ((to.y - from.y) * step) / 5 };
-      steps.push({ eventType: "mouseMoved", point, buttons: 1 });
+    solveButton?.blur();
+    panel.dataset.dragging = "true";
+    try {
+      await delay(0);
+      const handle = row.querySelector(".crossclimb__guess-dragger__left") || row;
+      const start = handle.getBoundingClientRect();
+      const destination = target.getBoundingClientRect();
+      const from = { x: start.left + Math.min(17, start.width / 2), y: start.top + start.height / 2 };
+      const to = {
+        x: from.x,
+        y: movingDown ? destination.bottom + 8 : destination.top - 18,
+      };
+      const steps = [
+        { eventType: "mouseMoved", point: from, buttons: 0 },
+        { eventType: "mousePressed", point: from, buttons: 1 },
+      ];
+      for (let step = 1; step <= 5; step += 1) {
+        const point = { x: from.x, y: from.y + ((to.y - from.y) * step) / 5 };
+        steps.push({ eventType: "mouseMoved", point, buttons: 1 });
+      }
+      steps.push({ eventType: "mouseReleased", point: to, buttons: 0 });
+      await mouseSequence(steps, 12);
+    } finally {
+      delete panel.dataset.dragging;
     }
-    steps.push({ eventType: "mouseReleased", point: to, buttons: 0 });
-    await mouseSequence(steps, 12);
   }
 
   async function finishCrossclimb() {
@@ -385,13 +486,13 @@
       await clickElement(input);
       let rung;
       await waitUntil(() => {
-        const visibleText = (document.querySelector("main")?.innerText || "").replace(/\s+/g, " ");
+        const visibleText = (document.querySelector("main")?.textContent || "").replace(/\s+/g, " ");
         rung = middleRungs
           .filter((candidate) => !usedClues.has(candidate.clue))
           .sort((a, b) => b.clue.length - a.clue.length)
           .find((candidate) => candidate.clue && visibleText.includes(candidate.clue.replace(/\s+/g, " ")));
         return Boolean(rung);
-      }, 300);
+      }, RENDER_SETTLE_TIMEOUT_MS);
       if (!rung) throw new Error(`Crossclimb could not match the clue shown for row ${index + 2}.`);
       usedClues.add(rung.clue);
       await fillLetterRow(row, rung.word);
@@ -399,7 +500,7 @@
         const liveRow = liveCrossclimbRow(row, row.getAttribute("aria-label")?.match(/row\s+(\d+)/i)?.[1]);
         const inputs = [...(liveRow || row).querySelectorAll("input")];
         return inputs.length > 0 && inputs.every((letter) => letter.disabled);
-      }, 500, 20);
+      }, RENDER_SETTLE_TIMEOUT_MS);
     }
 
     setStatus("Ordering the word ladder…", "working");
@@ -449,20 +550,61 @@
     throw new Error("Wend letter grid is not visible yet.");
   }
 
+  async function dragWendWord(elements, attempt) {
+    const centers = elements.map((element) => {
+      const rect = element.getBoundingClientRect();
+      return { x: rect.left + rect.width / 2, y: rect.top + rect.height / 2 };
+    });
+    const start = centers[0];
+    const next = centers[1] || { x: start.x + 1, y: start.y };
+    const distance = Math.hypot(next.x - start.x, next.y - start.y) || 1;
+    const threshold = {
+      x: start.x + ((next.x - start.x) / distance) * 7,
+      y: start.y + ((next.y - start.y) / distance) * 7,
+    };
+    const steps = [
+      { eventType: "mouseMoved", point: start, buttons: 0 },
+      { eventType: "mousePressed", point: start, buttons: 1 },
+      { eventType: "mouseMoved", point: threshold, buttons: 1 },
+      ...centers.slice(1).map((point) => ({ eventType: "mouseMoved", point, buttons: 1 })),
+    ];
+    const holds = attempt === 0 ? 2 : 4;
+    for (let index = 0; index < holds; index += 1) {
+      steps.push({ eventType: "mouseMoved", point: centers[centers.length - 1], buttons: 1 });
+    }
+    steps.push({ eventType: "mouseReleased", point: centers[centers.length - 1], buttons: 0 });
+    await mouseSequence(steps, attempt === 0 ? 14 : 20);
+  }
+
   async function solveWendGame() {
     const puzzle = await parsePuzzleData(solvers.parseWendPuzzle);
     if (/\/games\/wend\/results\/?$/.test(location.pathname) || document.querySelector("a[href*='/games/wend/results']")) return;
     setStatus("Weaving through the words…", "working");
-    for (const path of puzzle.paths) {
+    for (let pathIndex = 0; pathIndex < puzzle.paths.length; pathIndex += 1) {
+      const path = puzzle.paths[pathIndex];
       const cells = findWendGrid(puzzle);
       const elements = path.map((index) => cells[index]);
       if (elements.some((element) => !element)) throw new Error("A Wend solution path leaves the grid.");
-      const before = elementVisualSignature(cells);
-      await dragThrough(elements, { stepsPerCell: 2, stepDelay: 5 });
-      await waitForVisualChange(() => findWendGrid(puzzle), before, 180);
+      const before = path.map((index) => cells[index]?.outerHTML || "");
+      const pathRendered = () => {
+        if (acceptedSolutionVisible()) return true;
+        const liveCells = findWendGrid(puzzle);
+        return path.every((index, position) => (liveCells[index]?.outerHTML || "") !== before[position]);
+      };
+      if (pathIndex === puzzle.paths.length - 1) await waitForSignedInCompletion("wend");
+      let committed = false;
+      for (let attempt = 0; attempt < 2 && !committed; attempt += 1) {
+        const liveCells = findWendGrid(puzzle);
+        const liveElements = path.map((index) => liveCells[index]);
+        if (liveElements.some((element) => !element)) throw new Error("A Wend solution path disappeared while solving.");
+        await dragWendWord(liveElements, attempt);
+        committed = await waitUntil(pathRendered, 1800, 50);
+      }
+      if (!committed) throw new Error(`Wend word ${pathIndex + 1} did not commit after two gestures.`);
+      await settleSignedInAction(120);
       if (/\/results\/?$/.test(location.pathname)) return;
     }
-    if (!(await waitForAcceptedSolution(4000)) && !document.querySelector("a[href*='/games/wend/results']")) {
+    if (!(await waitForAcceptedSolution(8000)) && !document.querySelector("a[href*='/games/wend/results']")) {
       throw new Error("LinkedIn did not accept the Wend paths.");
     }
   }
@@ -488,7 +630,7 @@
     return { size, cells: parsed, regions: parsed.map((cell) => cell.region) };
   }
 
-  async function waitForQueensChange(index, previous, timeoutMs = 180) {
+  async function waitForQueensChange(index, previous, timeoutMs = RENDER_SETTLE_TIMEOUT_MS) {
     let current;
     await waitUntil(() => {
       if (acceptedSolutionVisible()) {
@@ -504,6 +646,10 @@
   async function solveQueensGame() {
     const board = parseQueensBoard();
     const queenIndexes = new Set(solvers.solveQueens(board));
+    let pendingClicks = board.cells.reduce((total, cell, index) => {
+      if (queenIndexes.has(index)) return total + (cell.state === "queen" ? 0 : cell.state === "cross" ? 1 : 2);
+      return total + (cell.state === "queen" ? 1 : 0);
+    }, 0);
     setStatus("Placing queens…", "working");
     for (let index = 0; index < board.cells.length; index += 1) {
       if (/\/results\/?$/.test(location.pathname)) return;
@@ -513,17 +659,23 @@
         const clicks = cell.state === "queen" ? 0 : cell.state === "cross" ? 1 : 2;
         for (let count = 0; count < clicks; count += 1) {
           const previous = cell.state;
+          if (pendingClicks === 1) await waitForSignedInCompletion("queens");
           await clickElement(cell.element);
           cell = await waitForQueensChange(index, previous);
           if (!cell && acceptedSolutionVisible()) return;
           if (!cell || cell.state === previous) throw new Error(`Queens cell ${index + 1} did not accept its value.`);
+          pendingClicks = Math.max(0, pendingClicks - 1);
+          await settleSignedInAction();
         }
       } else if (cell.state === "queen") {
         const previous = cell.state;
+        if (pendingClicks === 1) await waitForSignedInCompletion("queens");
         await clickElement(cell.element);
         cell = await waitForQueensChange(index, previous);
         if (!cell && acceptedSolutionVisible()) return;
         if (!cell || cell.state === previous) throw new Error(`Queens cell ${index + 1} did not clear.`);
+        pendingClicks = Math.max(0, pendingClicks - 1);
+        await settleSignedInAction();
       }
     }
     if (!(await waitForAcceptedSolution())) throw new Error("LinkedIn did not accept the Queens solution.");
@@ -570,12 +722,15 @@
   }
 
   function tangoValue(element) {
-    if (element.querySelector("[data-testid='cell-zero'], svg[aria-label='Moon']")) return 0;
-    if (element.querySelector("[data-testid='cell-one'], svg[aria-label='Sun']")) return 1;
+    // Current LinkedIn markup names Sun as cell-zero and Moon as cell-one,
+    // while the game click cycle is Empty -> Sun -> Moon. Keep our internal
+    // values aligned with that click cycle (Sun 1, Moon 0).
+    if (element.querySelector("svg[aria-label='Sun'], [data-testid='cell-zero']")) return 1;
+    if (element.querySelector("svg[aria-label='Moon'], [data-testid='cell-one']")) return 0;
     return -1;
   }
 
-  async function waitForTangoChange(index, previous, timeoutMs = 180) {
+  async function waitForTangoChange(index, previous, timeoutMs = RENDER_SETTLE_TIMEOUT_MS) {
     let element;
     await waitUntil(() => {
       element = findCellByIndex(index);
@@ -587,6 +742,10 @@
   async function solveTangoGame() {
     const board = parseTangoBoard();
     const solution = solvers.solveTango(board);
+    let pendingClicks = board.cells.reduce((total, element, index) => {
+      if (element.matches(":disabled, [aria-disabled='true']")) return total;
+      return total + solvers.tangoClickDistance(tangoValue(element), solution[index]);
+    }, 0);
     setStatus("Filling suns and moons…", "working");
     for (let index = 0; index < board.cells.length; index += 1) {
       let element = findCellByIndex(index);
@@ -597,8 +756,11 @@
         const previous = tangoValue(element);
         const clicksRemaining = solvers.tangoClickDistance(previous, target);
         if (!clicksRemaining) break;
+        if (pendingClicks === 1) await waitForSignedInCompletion("tango");
         await clickElement(element);
         element = await waitForTangoChange(index, previous);
+        pendingClicks = Math.max(0, pendingClicks - 1);
+        await settleSignedInAction();
         attempts += 1;
       }
       if (!element) {
@@ -700,7 +862,7 @@
     return { size, cells, givens, regions: sudokuRegions(cells, size) };
   }
 
-  async function waitForSudokuValue(index, expected, size, timeoutMs = 180) {
+  async function waitForSudokuValue(index, expected, size, timeoutMs = RENDER_SETTLE_TIMEOUT_MS) {
     return waitUntil(() => {
       if (acceptedSolutionVisible()) return true;
       const cell = findSudokuCells(size)[index];
@@ -712,6 +874,8 @@
     const board = parseSudokuBoard();
     const solution = solvers.solveSudoku(board);
     setStatus("Entering digits…", "working");
+    let pendingCells = board.cells.reduce((count, cell, index) =>
+      count + (Number((cell.textContent || "").trim()) === solution[index] ? 0 : 1), 0);
     for (let index = 0; index < board.cells.length; index += 1) {
       const liveCells = findSudokuCells(board.size);
       const cell = liveCells[index];
@@ -724,10 +888,13 @@
       const numberButton = document.querySelector(`button.sudoku-input-button[data-number='${solution[index]}']`)
         || [...document.querySelectorAll("main button")].find((button) => (button.textContent || "").trim() === String(solution[index]));
       if (!numberButton) throw new Error(`Mini Sudoku number button ${solution[index]} is missing.`);
+      if (pendingCells === 1) await waitForSignedInCompletion("mini-sudoku");
       await clickElement(numberButton);
       if (!(await waitForSudokuValue(index, solution[index], board.size))) {
         throw new Error(`Mini Sudoku cell ${index + 1} did not accept its value.`);
       }
+      pendingCells -= 1;
+      await settleSignedInAction();
       if (acceptedSolutionVisible()) return;
     }
     if (!(await waitForAcceptedSolution())) throw new Error("LinkedIn did not accept the Mini Sudoku solution.");
@@ -771,7 +938,7 @@
     }, timeoutMs);
   }
 
-  async function dragThrough(elements, { stepsPerCell = 1, stepDelay = 8 } = {}) {
+  async function dragThrough(elements, { stepsPerCell = 1, stepDelay = 8, endHoldSteps = 0 } = {}) {
     const centers = elements.map((element) => {
       const rect = element.getBoundingClientRect();
       return { x: rect.left + rect.width / 2, y: rect.top + rect.height / 2 };
@@ -803,6 +970,9 @@
         steps.push({ eventType: "mouseMoved", point, buttons: 1 });
       }
     }
+    for (let step = 0; step < endHoldSteps; step += 1) {
+      steps.push({ eventType: "mouseMoved", point: centers[centers.length - 1], buttons: 1 });
+    }
     steps.push({ eventType: "mouseReleased", point: centers[centers.length - 1], buttons: 0 });
     await mouseSequence(steps, stepDelay);
   }
@@ -816,14 +986,25 @@
       const clueCell = board.clues[clueIndex].index;
       const topLeft = rectangle.r1 * board.cols + rectangle.c1;
       const bottomRight = rectangle.r2 * board.cols + rectangle.c2;
-      const elements = [clueCell, topLeft, bottomRight].map((index) =>
+      const findRectangleElements = () => [clueCell, topLeft, bottomRight].map((index) =>
         document.querySelector(`[data-testid='cell-${index}'][data-cell-idx]`),
       );
+      let elements = findRectangleElements();
       if (elements.some((element) => !element)) throw new Error("A Patches rectangle cell is missing.");
       const getCells = () => [...document.querySelectorAll("[data-cell-idx][data-testid^='cell-'][aria-label]")];
       const before = elementVisualSignature(getCells());
       await dragThrough(elements, { stepDelay: 5 });
-      await waitForVisualChange(getCells, before, 100);
+      if (!(await waitForVisualChange(getCells, before, RENDER_SETTLE_TIMEOUT_MS))) {
+        if (acceptedSolutionVisible()) return;
+        elements = findRectangleElements();
+        if (elements.some((element) => !element)) throw new Error("A Patches rectangle cell disappeared before retrying.");
+        const retryBefore = elementVisualSignature(getCells());
+        await dragThrough(elements, { stepDelay: 8 });
+        if (!(await waitForVisualChange(getCells, retryBefore, RENDER_SETTLE_TIMEOUT_MS))) {
+          if (acceptedSolutionVisible()) return;
+          throw new Error(`Patches rectangle ${clueIndex + 1} did not render after retrying.`);
+        }
+      }
     }
     if (!(await waitForAcceptedSolution())) throw new Error("LinkedIn did not accept the Patches solution.");
   }
@@ -838,114 +1019,72 @@
       if (value) clues[value] = Number(cell.dataset.cellIdx);
     }
     const blockedEdgeKeys = new Set();
-    const addBlockedEdge = (index, direction) => {
-      const row = Math.floor(index / size);
-      const col = index % size;
-      if (direction === "right" && col + 1 < size) blockedEdgeKeys.add(`${index}:${index + 1}`);
-      if (direction === "down" && row + 1 < size) blockedEdgeKeys.add(`${index}:${index + size}`);
+    const addBlockedEdge = (first, second) => {
+      if (!Number.isInteger(first) || !Number.isInteger(second)) return;
+      if (first < 0 || second < 0 || first >= cells.length || second >= cells.length) return;
+      const low = Math.min(first, second);
+      const high = Math.max(first, second);
+      blockedEdgeKeys.add(`${low}:${high}`);
     };
 
-    // LinkedIn hashes the wall class names in current builds. Each cell still renders
-    // its grid background first, its optional clue second, and overlay pieces afterward.
-    // Every wall is represented by matching same-family overlays on its two neighboring
-    // cells, so pair groups whose indexes differ by one column or one row.
-    const overlayGroups = new Map();
+    // Current signed-in boards hash every wall class, but the rendered wall
+    // remains a thick border on an overlay's ::after pseudo-element. Read that
+    // geometry directly so class-name churn and partially drawn paths cannot
+    // change the graph passed to the solver.
     for (const cell of cells) {
       const index = Number(cell.dataset.cellIdx);
-      const hasClue = Object.values(clues).includes(index);
-      const overlays = cell.classList.contains("trail-cell")
-        ? [...cell.children].filter((child) => !child.matches(".trail-cell-border, .trail-cell-content"))
-        : [...cell.children].slice(hasClue ? 2 : 1);
-      for (const overlay of overlays) {
-        const signature = overlay.className;
-        if (!signature) continue;
-        if (!overlayGroups.has(signature)) {
-          overlayGroups.set(signature, { family: overlay.classList[0], indexes: [] });
-        }
-        overlayGroups.get(signature).indexes.push(index);
+      const row = Math.floor(index / size);
+      const col = index % size;
+      for (const overlay of cell.children) {
+        const style = getComputedStyle(overlay, "::after");
+        if (Number.parseFloat(style.borderRightWidth) > 2 && col + 1 < size) addBlockedEdge(index, index + 1);
+        if (Number.parseFloat(style.borderLeftWidth) > 2 && col > 0) addBlockedEdge(index - 1, index);
+        if (Number.parseFloat(style.borderBottomWidth) > 2 && row + 1 < size) addBlockedEdge(index, index + size);
+        if (Number.parseFloat(style.borderTopWidth) > 2 && row > 0) addBlockedEdge(index - size, index);
       }
     }
-    const families = new Map();
-    for (const group of overlayGroups.values()) {
-      if (!families.has(group.family)) families.set(group.family, []);
-      families.get(group.family).push(group.indexes);
-    }
-    let inferredEdges = new Set();
-    for (const groups of families.values()) {
-      const familyEdges = new Set();
-      for (const owners of groups) {
-        for (const neighbors of groups) {
-          if (owners === neighbors || owners.length !== neighbors.length) continue;
-          const neighborSet = new Set(neighbors);
-          for (const offset of [1, size]) {
-            const matches = owners.every((index) => {
-              if (offset === 1 && index % size === size - 1) return false;
-              return neighborSet.has(index + offset);
-            });
-            if (!matches) continue;
-            for (const index of owners) familyEdges.add(`${index}:${index + offset}`);
-          }
-        }
-      }
-      if (familyEdges.size > inferredEdges.size) inferredEdges = familyEdges;
-    }
-    for (const edge of inferredEdges) blockedEdgeKeys.add(edge);
 
     // Retain compatibility with older LinkedIn builds that used semantic classes.
     for (const wall of document.querySelectorAll(".trail-cell-wall")) {
       const owner = wall.closest("[data-cell-idx]");
       const index = Number(owner?.getAttribute("data-cell-idx"));
       if (!Number.isInteger(index) || index < 0 || index >= cells.length) continue;
-      if (wall.classList.contains("trail-cell-wall--right")) addBlockedEdge(index, "right");
-      if (wall.classList.contains("trail-cell-wall--down")) addBlockedEdge(index, "down");
+      if (wall.classList.contains("trail-cell-wall--right")) addBlockedEdge(index, index + 1);
+      if (wall.classList.contains("trail-cell-wall--down")) addBlockedEdge(index, index + size);
     }
     const blockedEdges = [...blockedEdgeKeys].map((edge) => edge.split(":").map(Number));
     return { rows: size, cols: size, clues, blockedEdges };
   }
 
+  function isZipCellFilled(cell) {
+    return Boolean(cell && (
+      cell.classList.contains("trail-cell--filled")
+      || cell.matches("[data-testid='filled-cell']")
+      || cell.querySelector("[data-testid='filled-cell']")
+    ));
+  }
+
   async function solveZipGame() {
+    if (acceptedSolutionVisible()) return;
     const board = parseZipBoard();
     setStatus("Finding the path…", "working");
     await nextFrame();
     const path = solvers.solveZip(board);
-    setStatus("Drawing the path…", "working");
-    const elements = path.map((index) => findCellByIndex(index));
-    if (elements.some((element) => !element)) throw new Error("A Zip path cell is missing.");
-
-    // Zip accepts a pointer move at each cell center. One continuous drag uses
-    // about half as many trusted protocol events as keydown + keyup per cell.
-    await dragThrough(elements, { stepsPerCell: 1, stepDelay: 3 });
-    if (await waitForAcceptedSolution(1500)) {
-      solveSuccessMessage = "Solved by drag!";
-      return;
+    setStatus("Connecting the path…", "working");
+    for (let index = 0; index < path.length; index += 1) {
+      if (index === path.length - 1) await waitForSignedInCompletion("zip");
+      const cell = findCellByIndex(path[index]);
+      if (!cell) throw new Error(`Zip path cell ${index + 1} is missing.`);
+      await clickElement(cell);
+      const connected = await waitUntil(() =>
+        acceptedSolutionVisible() || isZipCellFilled(findCellByIndex(path[index])),
+      1800, 50);
+      if (!connected) throw new Error(`Zip did not connect path cell ${index + 1}.`);
+      await settleSignedInAction(60);
+      if (acceptedSolutionVisible()) break;
     }
-
-    // A layout change or dropped pointer move can leave a partial path. Clicking
-    // checkpoint 1 truncates it back to the start before the proven key fallback.
-    setStatus("Retrying Zip with arrow keys…", "working");
-    const start = findCellByIndex(path[0]);
-    if (!start) {
-      if (acceptedSolutionVisible()) return;
-      throw new Error("The Zip start cell disappeared after drawing the path.");
-    }
-    const before = elementVisualSignature(findIndexedCells());
-    await clickElement(start);
-    await waitForVisualChange(findIndexedCells, before, 120);
-    const directions = {
-      [-board.cols]: ["ArrowUp", "ArrowUp", 38],
-      [board.cols]: ["ArrowDown", "ArrowDown", 40],
-      [-1]: ["ArrowLeft", "ArrowLeft", 37],
-      [1]: ["ArrowRight", "ArrowRight", 39],
-    };
-    const keySequence = [];
-    for (let index = 1; index < path.length; index += 1) {
-      const direction = directions[path[index] - path[index - 1]];
-      if (!direction) throw new Error("The Zip route contains non-adjacent cells.");
-      keySequence.push({ key: direction[0], code: direction[1], keyCode: direction[2] });
-    }
-    await pressKeys(keySequence, 12);
-    if (!(await waitForAcceptedSolution())) throw new Error("LinkedIn did not accept the Zip path.");
-    solveSuccessMessage = "Solved by arrow fallback.";
+    if (!(await waitForAcceptedSolution(8000))) throw new Error("LinkedIn did not accept the Zip path.");
+    solveSuccessMessage = "Solved with verified cell connections.";
   }
 
   const GAME_SOLVERS = {
@@ -967,6 +1106,9 @@
       return;
     }
     solving = true;
+    solveStartedAt = Date.now();
+    solveFirstInputAt = 0;
+    solveButton.blur();
     solveButton.disabled = true;
     panel.dataset.solving = "true";
     try {
@@ -983,7 +1125,10 @@
     } finally {
       await endTrustedInput();
       solving = false;
+      solveStartedAt = 0;
+      solveFirstInputAt = 0;
       solveButton.disabled = false;
+      delete panel.dataset.dragging;
       panel.dataset.solving = "false";
     }
   }
@@ -1002,10 +1147,14 @@
     }
   });
   observer.observe(document.documentElement, { childList: true, subtree: true });
-  setInterval(() => {
+  const navigationPoll = setInterval(() => {
     if (location.href !== lastUrl) {
       lastUrl = location.href;
       updatePanel();
     }
-  }, 750);
+  }, 2000);
+  addEventListener("pagehide", () => {
+    observer.disconnect();
+    clearInterval(navigationPoll);
+  }, { once: true });
 })();

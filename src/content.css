@@ -21,6 +21,15 @@
 
 #linkedin-logic-solver[hidden] { display: none !important; }
 
+/* Trusted input does not move the physical macOS cursor. Remove the panel from
+   hit testing while solving so a cursor parked over the button cannot interrupt
+   Crossclimb's synthetic row drag. */
+#linkedin-logic-solver[data-solving="true"],
+#linkedin-logic-solver[data-dragging="true"] {
+  pointer-events: none;
+  user-select: none;
+}
+
 #linkedin-logic-solver .lls__eyebrow {
   margin-bottom: 4px;
   color: var(--lls-green);
@@ -51,8 +60,8 @@
   transition: transform 120ms ease, opacity 120ms ease, background 120ms ease;
 }
 
-#linkedin-logic-solver .lls__solve:hover { background: #116c46; }
-#linkedin-logic-solver .lls__solve:active { transform: translateY(1px); }
+#linkedin-logic-solver .lls__solve:not(:disabled):hover { background: #116c46; }
+#linkedin-logic-solver .lls__solve:not(:disabled):active { transform: translateY(1px); }
 #linkedin-logic-solver .lls__solve:disabled { cursor: wait; opacity: 0.58; }
 
 #linkedin-logic-solver .lls__status {

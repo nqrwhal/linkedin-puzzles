@@ -17,6 +17,13 @@ test("Pinpoint extracts accepted categories from HTML-encoded bootstrap data", (
   assert.deepEqual(parsePinpointSolutions(source), ["Biological taxonomy (ways to classify living things)", "taxonomy"]);
 });
 
+test("Pinpoint accepts the current singular and structured solution payloads", () => {
+  const singular = `{"pinpointGamePuzzle":{"solution":"Things associated with doom"}}`;
+  const structured = `{"pinpointGamePuzzle":{"solutions":[{"text":"Musical intervals"},{"value":"Intervals"}]}}`;
+  assert.deepEqual(parsePinpointSolutions(singular), ["Things associated with doom"]);
+  assert.deepEqual(parsePinpointSolutions(structured), ["Musical intervals", "Intervals"]);
+});
+
 test("Crossclimb extracts clue answers and their ladder indexes", () => {
   const source = `{&quot;crossClimbGamePuzzle&quot;:{&quot;rungs&quot;:[{&quot;solutionRungIndex&quot;:3,&quot;clue&quot;:&quot;Country&quot;,&quot;word&quot;:&quot;WALES&quot;},{&quot;solutionRungIndex&quot;:1,&quot;clue&quot;:&quot;Unsure&quot;,&quot;word&quot;:&quot;WAVER&quot;},{&quot;solutionRungIndex&quot;:2,&quot;clue&quot;:&quot;Ocean&quot;,&quot;word&quot;:&quot;WAVES&quot;}]}}`;
   assert.deepEqual(parseCrossclimbRungs(source), [
@@ -180,6 +187,20 @@ test("Zip solves today's 7x7 route without dropping a checkpoint", () => {
     assert.ok(position > previousPosition);
     previousPosition = position;
   }
+});
+
+test("Zip honors every rendered wall on the signed-in 7x7 board", () => {
+  const clues = { 1: 4, 2: 2, 3: 7, 4: 21, 5: 35, 6: 44, 7: 13, 8: 27, 9: 41, 10: 46 };
+  const blockedEdges = [
+    [9, 10], [16, 17], [18, 19], [22, 23], [25, 26], [29, 30], [31, 32], [38, 39],
+    [2, 9], [11, 18], [16, 23], [25, 32], [30, 37], [39, 46],
+  ];
+  const expected = [
+    4, 3, 2, 1, 0, 7, 8, 9, 16, 15, 14, 21, 22, 29, 28, 35, 42,
+    43, 36, 37, 44, 45, 38, 31, 30, 23, 24, 25, 18, 17, 10, 11, 12,
+    5, 6, 13, 20, 19, 26, 27, 34, 33, 32, 39, 40, 41, 48, 47, 46,
+  ];
+  assert.deepEqual(solveZip({ rows: 7, cols: 7, clues, blockedEdges, timeoutMs: 20000 }), expected);
 });
 
 test("Zip honors walls on today's 6x6 route", () => {

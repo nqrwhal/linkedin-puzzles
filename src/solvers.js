@@ -82,11 +82,67 @@
     return match ? Number(match[1]) : null;
   }
 
+  function jsonStringsForKey(source, key) {
+    const values = [];
+    const needle = `"${key}"`;
+    let offset = 0;
+    while ((offset = source.indexOf(needle, offset)) >= 0) {
+      let index = offset + needle.length;
+      while (/\s/.test(source[index] || "")) index += 1;
+      if (source[index] !== ":") {
+        offset = index;
+        continue;
+      }
+      index += 1;
+      while (/\s/.test(source[index] || "")) index += 1;
+      if (source[index] !== '"') {
+        offset = index + 1;
+        continue;
+      }
+      let escaped = false;
+      for (let end = index + 1; end < source.length; end += 1) {
+        const character = source[end];
+        if (escaped) escaped = false;
+        else if (character === "\\") escaped = true;
+        else if (character === '"') {
+          try {
+            values.push(JSON.parse(source.slice(index, end + 1)));
+          } catch {
+            // Keep scanning; malformed bootstrap fragments are not live data.
+          }
+          offset = end + 1;
+          break;
+        }
+      }
+      if (offset <= index) offset = index + 1;
+    }
+    return values;
+  }
+
+  function pinpointStrings(value, depth = 0) {
+    if (typeof value === "string") return value.trim() ? [value.trim()] : [];
+    if (!value || depth > 4) return [];
+    if (Array.isArray(value)) return value.flatMap((item) => pinpointStrings(item, depth + 1));
+    if (typeof value !== "object") return [];
+    const preferredKeys = ["answer", "category", "solution", "value", "label", "text"];
+    return preferredKeys.flatMap((key) => pinpointStrings(value[key], depth + 1));
+  }
+
   function parsePinpointSolutions(sources) {
     for (const raw of sourceList(sources)) {
       const source = normalizeBootstrap(raw);
+      if (!/blueprintGamePuzzle|pinpointGamePuzzle|pinpoint/i.test(source)) continue;
       for (const value of jsonValuesForKey(source, "solutions")) {
-        if (Array.isArray(value) && value.length && value.every((item) => typeof item === "string")) return value;
+        const solutions = pinpointStrings(value);
+        if (solutions.length) return [...new Set(solutions)];
+      }
+      for (const key of ["solution", "answer", "category"]) {
+        const direct = jsonStringsForKey(source, key).map((value) => value.trim()).filter(Boolean);
+        if (direct.length) return [...new Set(direct)];
+        for (const value of jsonValuesForKey(source, key)) {
+          const solutions = pinpointStrings(value);
+          if (solutions.length) return [...new Set(solutions)];
+        }
       }
     }
     throw new Error("Pinpoint solutions were not found in LinkedIn's puzzle data.");

@@ -48,7 +48,7 @@ The extension reads the same accessibility labels and cell metadata that LinkedI
 - Crossclimb: visible clue-to-row matching, ladder ordering, and final-pair entry
 - Wend: exact answer paths from the page's delivered grid data
 
-Trusted input is paced where LinkedIn can safely consume it: Zip reads rendered wall geometry and connects the solved route one verified cell at a time; Wend uses short per-word gestures and confirms every letter cell committed; Patches uses compact trusted drag sequences with mutation-driven settling; and Crossclimb advances after React has rendered each letter or row move.
+Input is paced where LinkedIn can safely consume it: Zip reads rendered wall geometry and connects the solved route one verified cell at a time; Wend dispatches the board's touch contract locally and confirms every letter cell locked; Patches uses compact trusted drag sequences with mutation-driven settling; and Crossclimb advances after React has rendered each letter or row move.
 
 During a solve, the extension panel is removed from pointer hit testing so a physical cursor left over the Solve button cannot interrupt trusted Crossclimb drags. Board waits use mutation signals with a low-frequency fallback and lag-tolerant deadlines; Patches also verifies each rendered rectangle and retries once before continuing.
 

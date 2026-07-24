@@ -32,7 +32,7 @@ test("capture and debugger resources have explicit bounds and cleanup", () => {
   assert.match(background, /entries\.length > 6[\s\S]*?12 \* 1024 \* 1024/);
   assert.match(background, /voyager\\\/api\\\/\|games\\\/api\\\//);
   assert.match(background, /for \(const kind of \["Props", "Fiber"\]\)/);
-  assert.match(background, /onUpdated[\s\S]*?primeCapture\(tabId, changeInfo\.url\)/);
+  assert.match(background, /onUpdated[\s\S]*?primeCapture\(tabId, url\)/);
   assert.match(content, /PUZZLE_DATA_ATTEMPTS = 32/);
 });
 
@@ -47,15 +47,22 @@ test("Zip reads rendered wall geometry and verifies each connected cell", () => 
 
 test("Wend uses bounded word gestures and verifies every path cell", () => {
   assert.match(content, /async function dragWendWord\(elements, attempt\)/);
-  assert.match(content, /mousePressed[\s\S]*?centers\.slice\(1\)[\s\S]*?mouseReleased/);
-  assert.match(content, /solveWendGame[\s\S]*?path\.every\([\s\S]*?outerHTML/);
+  assert.match(content, /new Touch\([\s\S]*?new TouchEvent\(eventType[\s\S]*?dispatch\("touchend"/);
+  assert.match(content, /for \(const element of elements\.slice\(1\)\)[\s\S]*?dispatch\("touchmove"/);
+  assert.match(content, /solveWendGame[\s\S]*?path\.every\([\s\S]*?data-cell-is-locked/);
+  assert.match(content, /let committed = pathRendered\(\)/);
   assert.match(content, /attempt < 2[\s\S]*?Wend word \$\{pathIndex \+ 1\} did not commit after two gestures/);
 });
 
-test("early word-game responses survive initial content-script capture", () => {
-  assert.match(background, /const previousDocument = captureDocuments\.get\(tabId\)/);
-  assert.match(background, /if \(previousDocument && previousDocument !== documentId\)[\s\S]*?puzzleSources\.delete\(tabId\)/);
-  assert.match(background, /else if \(!previousDocument\)[\s\S]*?Preserve that early response on first attach/);
+test("Wend touch input stays page-local instead of depending on the service worker", () => {
+  assert.doesNotMatch(content, /lls-input-touch-events/);
+  assert.doesNotMatch(background, /Input\.dispatchTouchEvent|lls-input-touch-events/);
+});
+
+test("word-game sources clear before navigation and survive content-script startup", () => {
+  assert.match(background, /changeInfo\.status === "loading"[\s\S]*?puzzleSources\.delete\(tabId\)/);
+  assert.match(background, /async function startCapture[\s\S]*?captureDocuments\.set\(tabId, documentId\)[\s\S]*?await primeCapture/);
+  assert.doesNotMatch(background, /async function startCapture[\s\S]{0,500}?puzzleSources\.delete/);
 });
 
 test("signed-in games pace their final action and verify saves", () => {

@@ -551,29 +551,51 @@
   }
 
   async function dragWendWord(elements, attempt) {
-    const centers = elements.map((element) => {
-      const rect = element.getBoundingClientRect();
-      return { x: rect.left + rect.width / 2, y: rect.top + rect.height / 2 };
-    });
-    const start = centers[0];
-    const next = centers[1] || { x: start.x + 1, y: start.y };
-    const distance = Math.hypot(next.x - start.x, next.y - start.y) || 1;
-    const threshold = {
-      x: start.x + ((next.x - start.x) / distance) * 7,
-      y: start.y + ((next.y - start.y) / distance) * 7,
-    };
-    const steps = [
-      { eventType: "mouseMoved", point: start, buttons: 0 },
-      { eventType: "mousePressed", point: start, buttons: 1 },
-      { eventType: "mouseMoved", point: threshold, buttons: 1 },
-      ...centers.slice(1).map((point) => ({ eventType: "mouseMoved", point, buttons: 1 })),
-    ];
-    const holds = attempt === 0 ? 2 : 4;
-    for (let index = 0; index < holds; index += 1) {
-      steps.push({ eventType: "mouseMoved", point: centers[centers.length - 1], buttons: 1 });
+    if (typeof Touch !== "function" || typeof TouchEvent !== "function") {
+      throw new Error("This Chrome version cannot create Wend touch events.");
     }
-    steps.push({ eventType: "mouseReleased", point: centers[centers.length - 1], buttons: 0 });
-    await mouseSequence(steps, attempt === 0 ? 14 : 20);
+    const target = elements[0];
+    const makeTouch = (element) => {
+      const rect = element.getBoundingClientRect();
+      const clientX = rect.left + rect.width / 2;
+      const clientY = rect.top + rect.height / 2;
+      return new Touch({
+        identifier: 0,
+        target,
+        clientX,
+        clientY,
+        screenX: clientX,
+        screenY: clientY,
+        pageX: clientX + scrollX,
+        pageY: clientY + scrollY,
+        radiusX: 1,
+        radiusY: 1,
+        force: 1,
+      });
+    };
+    const dispatch = (eventType, touches, changedTouches) => target.dispatchEvent(new TouchEvent(eventType, {
+      bubbles: true,
+      cancelable: true,
+      composed: true,
+      touches,
+      targetTouches: touches,
+      changedTouches,
+    }));
+    const intervalMs = attempt === 0 ? 55 : 75;
+    let touch = makeTouch(elements[0]);
+    dispatch("touchstart", [touch], [touch]);
+    for (const element of elements.slice(1)) {
+      await delay(intervalMs);
+      touch = makeTouch(element);
+      dispatch("touchmove", [touch], [touch]);
+    }
+    const holds = attempt === 0 ? 0 : 1;
+    for (let index = 0; index < holds; index += 1) {
+      await delay(intervalMs);
+      dispatch("touchmove", [touch], [touch]);
+    }
+    await delay(attempt === 0 ? 80 : 100);
+    dispatch("touchend", [], [touch]);
   }
 
   async function solveWendGame() {
@@ -585,14 +607,16 @@
       const cells = findWendGrid(puzzle);
       const elements = path.map((index) => cells[index]);
       if (elements.some((element) => !element)) throw new Error("A Wend solution path leaves the grid.");
-      const before = path.map((index) => cells[index]?.outerHTML || "");
       const pathRendered = () => {
         if (acceptedSolutionVisible()) return true;
         const liveCells = findWendGrid(puzzle);
-        return path.every((index, position) => (liveCells[index]?.outerHTML || "") !== before[position]);
+        return path.every((index) =>
+          liveCells[index]?.getAttribute("data-cell-is-locked") === "true"
+          || Boolean(liveCells[index]?.querySelector(`[data-testid='cell-${index}-selected']`)),
+        );
       };
       if (pathIndex === puzzle.paths.length - 1) await waitForSignedInCompletion("wend");
-      let committed = false;
+      let committed = pathRendered();
       for (let attempt = 0; attempt < 2 && !committed; attempt += 1) {
         const liveCells = findWendGrid(puzzle);
         const liveElements = path.map((index) => liveCells[index]);

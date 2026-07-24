@@ -211,15 +211,10 @@ function armCaptureStop(tabId) {
 
 async function startCapture(tabId, documentId, url) {
   syncPuzzleRoute(tabId, url);
-  const previousDocument = captureDocuments.get(tabId);
-  if (previousDocument && previousDocument !== documentId) {
-    captureDocuments.set(tabId, documentId);
-    puzzleSources.delete(tabId);
-  } else if (!previousDocument) {
-    // onUpdated can capture the puzzle response before the content script
-    // announces its document. Preserve that early response on first attach.
-    captureDocuments.set(tabId, documentId);
-  }
+  // Navigation and route-change listeners clear stale sources before the new
+  // response arrives. Never clear here: onUpdated may already have captured
+  // this document's one-shot puzzle payload before its content script starts.
+  captureDocuments.set(tabId, documentId);
   await primeCapture(tabId, url);
 }
 
@@ -420,15 +415,22 @@ chrome.tabs?.onRemoved.addListener((tabId) => {
   void forceDetach(tabId);
 });
 
-chrome.tabs?.onUpdated.addListener((tabId, changeInfo) => {
-  if (!changeInfo.url) return;
-  if (/^https:\/\/www\.linkedin\.com\/games\//.test(changeInfo.url)) {
-    syncPuzzleRoute(tabId, changeInfo.url);
-    if (/^https:\/\/www\.linkedin\.com\/games\/(?:view\/)?(?:pinpoint|crossclimb|wend)(?:\/|[?#]|$)/.test(changeInfo.url)) {
+chrome.tabs?.onUpdated.addListener((tabId, changeInfo, tab) => {
+  const url = changeInfo.url || tab?.url || "";
+  if (changeInfo.status === "loading") {
+    captureDocuments.delete(tabId);
+    puzzleSources.delete(tabId);
+    pendingPuzzleResponses.delete(tabId);
+    pageScanTimes.delete(tabId);
+  }
+  if (!changeInfo.url && changeInfo.status !== "loading") return;
+  if (/^https:\/\/www\.linkedin\.com\/games\//.test(url)) {
+    syncPuzzleRoute(tabId, url);
+    if (/^https:\/\/www\.linkedin\.com\/games\/(?:view\/)?(?:pinpoint|crossclimb|wend)(?:\/|[?#]|$)/.test(url)) {
       // Prime Network capture on the route transition instead of waiting for
       // the content script. On a cold service worker, that delay can miss the
       // one response containing Pinpoint or Crossclimb answers.
-      void primeCapture(tabId, changeInfo.url).catch(() => {
+      void primeCapture(tabId, url).catch(() => {
         // React props and bootstrap scripts remain available as fallbacks.
       });
     }

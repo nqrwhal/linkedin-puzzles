@@ -14,7 +14,7 @@
   }
 
   function normalizeBootstrap(source) {
-    let value = source
+    return source
       .replace(/&quot;/g, '"')
       .replace(/&#34;/g, '"')
       .replace(/&#39;|&apos;/g, "'")
@@ -23,8 +23,20 @@
       .replace(/\\u0022/gi, '"')
       .replace(/\\u0027/gi, "'")
       .replace(/\\u003d/gi, "=");
-    for (let pass = 0; pass < 3 && value.includes('\\"'); pass += 1) value = value.replace(/\\"/g, '"');
-    return value;
+  }
+
+  function bootstrapVariants(source) {
+    const variants = [normalizeBootstrap(source)];
+    let value = variants[0];
+    // Some retained script values escape their entire JSON object, while live
+    // bootstrap objects only escape quotes inside clue text. Always try the
+    // valid outer JSON first so an inner phrase such as \"to refrigerate\"
+    // remains parseable, then peel wrapper escaping only as a fallback.
+    for (let pass = 0; pass < 3 && value.includes('\\"'); pass += 1) {
+      value = value.replace(/\\"/g, '"');
+      if (!variants.includes(value)) variants.push(value);
+    }
+    return variants;
   }
 
   function jsonValuesForKey(source, key) {
@@ -130,18 +142,19 @@
 
   function parsePinpointSolutions(sources) {
     for (const raw of sourceList(sources)) {
-      const source = normalizeBootstrap(raw);
-      if (!/blueprintGamePuzzle|pinpointGamePuzzle|pinpoint/i.test(source)) continue;
-      for (const value of jsonValuesForKey(source, "solutions")) {
-        const solutions = pinpointStrings(value);
-        if (solutions.length) return [...new Set(solutions)];
-      }
-      for (const key of ["solution", "answer", "category"]) {
-        const direct = jsonStringsForKey(source, key).map((value) => value.trim()).filter(Boolean);
-        if (direct.length) return [...new Set(direct)];
-        for (const value of jsonValuesForKey(source, key)) {
+      for (const source of bootstrapVariants(raw)) {
+        if (!/blueprintGamePuzzle|pinpointGamePuzzle|pinpoint/i.test(source)) continue;
+        for (const value of jsonValuesForKey(source, "solutions")) {
           const solutions = pinpointStrings(value);
           if (solutions.length) return [...new Set(solutions)];
+        }
+        for (const key of ["solution", "answer", "category"]) {
+          const direct = jsonStringsForKey(source, key).map((value) => value.trim()).filter(Boolean);
+          if (direct.length) return [...new Set(direct)];
+          for (const value of jsonValuesForKey(source, key)) {
+            const solutions = pinpointStrings(value);
+            if (solutions.length) return [...new Set(solutions)];
+          }
         }
       }
     }
@@ -150,15 +163,16 @@
 
   function parseCrossclimbRungs(sources) {
     for (const raw of sourceList(sources)) {
-      const source = normalizeBootstrap(raw);
-      for (const value of jsonValuesForKey(source, "rungs")) {
-        if (!Array.isArray(value) || value.length < 3) continue;
-        if (!value.every((rung) => typeof rung?.word === "string" && Number.isInteger(rung.solutionRungIndex))) continue;
-        return value.map((rung) => ({
-          clue: typeof rung.clue === "string" ? rung.clue : "",
-          word: rung.word.toUpperCase(),
-          solutionRungIndex: rung.solutionRungIndex,
-        }));
+      for (const source of bootstrapVariants(raw)) {
+        for (const value of jsonValuesForKey(source, "rungs")) {
+          if (!Array.isArray(value) || value.length < 3) continue;
+          if (!value.every((rung) => typeof rung?.word === "string" && Number.isInteger(rung.solutionRungIndex))) continue;
+          return value.map((rung) => ({
+            clue: typeof rung.clue === "string" ? rung.clue : "",
+            word: rung.word.toUpperCase(),
+            solutionRungIndex: rung.solutionRungIndex,
+          }));
+        }
       }
     }
     throw new Error("Crossclimb answers were not found in LinkedIn's puzzle data.");
@@ -166,19 +180,20 @@
 
   function parseWendPuzzle(sources) {
     for (const raw of sourceList(sources)) {
-      const source = normalizeBootstrap(raw);
-      const letters = jsonValuesForKey(source, "puzzleLetters").find((value) => Array.isArray(value) && value.every((letter) => typeof letter === "string"));
-      const words = jsonValuesForKey(source, "solutionWords").find((value) =>
-        Array.isArray(value) && value.length && value.every((word) => Array.isArray(word?.sequencingIndex) && word.sequencingIndex.every(Number.isInteger)),
-      );
-      const rows = numberForKey(source, "gridRows");
-      const cols = numberForKey(source, "gridCols");
-      if (!letters || !words || !rows || !cols || letters.length !== rows * cols) continue;
-      const paths = words.map((word) => word.sequencingIndex.slice());
-      const used = paths.flat();
-      assert(used.every((index) => index >= 0 && index < letters.length), "Wend solution contains an invalid cell index.");
-      assert(new Set(used).size === used.length, "Wend solution paths overlap.");
-      return { rows, cols, letters: letters.map((letter) => letter.toUpperCase()), paths };
+      for (const source of bootstrapVariants(raw)) {
+        const letters = jsonValuesForKey(source, "puzzleLetters").find((value) => Array.isArray(value) && value.every((letter) => typeof letter === "string"));
+        const words = jsonValuesForKey(source, "solutionWords").find((value) =>
+          Array.isArray(value) && value.length && value.every((word) => Array.isArray(word?.sequencingIndex) && word.sequencingIndex.every(Number.isInteger)),
+        );
+        const rows = numberForKey(source, "gridRows");
+        const cols = numberForKey(source, "gridCols");
+        if (!letters || !words || !rows || !cols || letters.length !== rows * cols) continue;
+        const paths = words.map((word) => word.sequencingIndex.slice());
+        const used = paths.flat();
+        assert(used.every((index) => index >= 0 && index < letters.length), "Wend solution contains an invalid cell index.");
+        assert(new Set(used).size === used.length, "Wend solution paths overlap.");
+        return { rows, cols, letters: letters.map((letter) => letter.toUpperCase()), paths };
+      }
     }
     throw new Error("Wend paths were not found in LinkedIn's puzzle data.");
   }

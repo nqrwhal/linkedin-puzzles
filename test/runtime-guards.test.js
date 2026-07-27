@@ -66,7 +66,7 @@ test("word-game sources clear before navigation and survive content-script start
 });
 
 test("signed-in games pace their final action and verify saves", () => {
-  assert.match(content, /SIGNED_IN_COMPLETION_FLOORS_MS = \{[\s\S]*?pinpoint:[\s\S]*?wend:[\s\S]*?queens:[\s\S]*?tango:[\s\S]*?zip:[\s\S]*?"mini-sudoku":/);
+  assert.match(content, /SIGNED_IN_COMPLETION_FLOORS_MS = \{[\s\S]*?pinpoint:[\s\S]*?wend:[\s\S]*?queens: 6000[\s\S]*?tango:[\s\S]*?zip:[\s\S]*?"mini-sudoku":[\s\S]*?patches: 6000/);
   assert.match(content, /waitForSignedInCompletion\("pinpoint"\)/);
   assert.match(content, /waitForSignedInCompletion\("wend"\)/);
   assert.match(content, /waitForSignedInCompletion\("queens"\)/);
@@ -74,6 +74,9 @@ test("signed-in games pace their final action and verify saves", () => {
   assert.match(content, /waitForSignedInCompletion\("zip"\)/);
   assert.match(content, /pendingCells === 1[\s\S]*?waitForSignedInCompletion\("mini-sudoku"\)/);
   assert.match(content, /index === path\.length - 1[\s\S]*?waitForSignedInCompletion\("zip"\)/);
+  assert.match(content, /clueIndex === rectangles\.length - 1[\s\S]*?waitForSignedInCompletion\("patches"\)/);
+  assert.match(content, /SIGNED_IN_SAVE_SETTLE_MS = 2000[\s\S]*?waitUntil\(saveErrorVisible, SIGNED_IN_SAVE_SETTLE_MS/);
+  assert.match(content, /queensCells:[\s\S]*?break queensCells[\s\S]*?waitForAcceptedSolution/);
   assert.match(content, /solveFirstInputAt \|\| solveStartedAt/);
   assert.match(content, /issue saving your game/);
 });

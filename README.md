@@ -50,7 +50,7 @@ The extension reads the same accessibility labels and cell metadata that LinkedI
 
 Word-game parsers preserve valid embedded JSON before peeling wrapper escaping, so quoted clue and answer text cannot corrupt otherwise complete puzzle data.
 
-Input is paced where LinkedIn can safely consume it: Zip reads rendered wall geometry and connects the solved route one verified cell at a time; Wend dispatches the board's touch contract locally and confirms every letter cell locked; Patches uses compact trusted drag sequences with mutation-driven settling; and Crossclimb advances after React has rendered each letter or row move.
+Input is paced where LinkedIn can safely consume it: Zip reads rendered wall geometry and connects the solved route one verified cell at a time; Wend dispatches the board's touch contract locally and confirms every letter cell locked; Patches uses compact trusted drag sequences with mutation-driven settling; and Crossclimb advances after React has rendered each letter or row move. Signed-in Queens and Patches solves hold only their final move until LinkedIn's save window is open, then wait for any late save rejection before reporting success.
 
 During a solve, the extension panel is removed from pointer hit testing so a physical cursor left over the Solve button cannot interrupt trusted Crossclimb drags. Board waits use mutation signals with a low-frequency fallback and lag-tolerant deadlines; Patches also verifies each rendered rectangle and retries once before continuing.
 

@@ -35,13 +35,15 @@
   const PUZZLE_DATA_ATTEMPTS = 32;
   const PUZZLE_DATA_RETRY_MS = 250;
   const SIGNED_IN_ACTION_SETTLE_MS = 50;
+  const SIGNED_IN_SAVE_SETTLE_MS = 2000;
   const SIGNED_IN_COMPLETION_FLOORS_MS = {
     pinpoint: 1800,
     wend: 2200,
-    queens: 3200,
+    queens: 6000,
     tango: 3200,
     zip: 2800,
     "mini-sudoku": 3600,
+    patches: 6000,
   };
   const PUZZLE_SOURCE_PATTERN = /blueprintGamePuzzle|pinpointGamePuzzle|crossClimbGamePuzzle|wendGamePuzzle|"solutions"\s*:|"solution"\s*:|"answer"\s*:|solutionWords|puzzleLetters|rungs/;
   const delay = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
@@ -138,7 +140,8 @@
     // Signed-in pages can render their local completion state just before the
     // save request finishes. Give a late save error time to surface before the
     // extension reports success.
-    if (isSignedInGamePage()) await delay(650);
+    if (isSignedInGamePage()
+      && await waitUntil(saveErrorVisible, SIGNED_IN_SAVE_SETTLE_MS, 50, document.documentElement)) return false;
     return acceptedSolutionVisible(includeSeeResults);
   }
 
@@ -675,8 +678,8 @@
       return total + (cell.state === "queen" ? 1 : 0);
     }, 0);
     setStatus("Placing queens…", "working");
-    for (let index = 0; index < board.cells.length; index += 1) {
-      if (/\/results\/?$/.test(location.pathname)) return;
+    queensCells: for (let index = 0; index < board.cells.length; index += 1) {
+      if (/\/results\/?$/.test(location.pathname)) break;
       let cell = parseQueensBoard().cells[index];
       const wantsQueen = queenIndexes.has(index);
       if (wantsQueen) {
@@ -686,7 +689,7 @@
           if (pendingClicks === 1) await waitForSignedInCompletion("queens");
           await clickElement(cell.element);
           cell = await waitForQueensChange(index, previous);
-          if (!cell && acceptedSolutionVisible()) return;
+          if (!cell && acceptedSolutionVisible()) break queensCells;
           if (!cell || cell.state === previous) throw new Error(`Queens cell ${index + 1} did not accept its value.`);
           pendingClicks = Math.max(0, pendingClicks - 1);
           await settleSignedInAction();
@@ -696,7 +699,7 @@
         if (pendingClicks === 1) await waitForSignedInCompletion("queens");
         await clickElement(cell.element);
         cell = await waitForQueensChange(index, previous);
-        if (!cell && acceptedSolutionVisible()) return;
+        if (!cell && acceptedSolutionVisible()) break;
         if (!cell || cell.state === previous) throw new Error(`Queens cell ${index + 1} did not clear.`);
         pendingClicks = Math.max(0, pendingClicks - 1);
         await settleSignedInAction();
@@ -1017,15 +1020,16 @@
       if (elements.some((element) => !element)) throw new Error("A Patches rectangle cell is missing.");
       const getCells = () => [...document.querySelectorAll("[data-cell-idx][data-testid^='cell-'][aria-label]")];
       const before = elementVisualSignature(getCells());
+      if (clueIndex === rectangles.length - 1) await waitForSignedInCompletion("patches");
       await dragThrough(elements, { stepDelay: 5 });
       if (!(await waitForVisualChange(getCells, before, RENDER_SETTLE_TIMEOUT_MS))) {
-        if (acceptedSolutionVisible()) return;
+        if (acceptedSolutionVisible()) break;
         elements = findRectangleElements();
         if (elements.some((element) => !element)) throw new Error("A Patches rectangle cell disappeared before retrying.");
         const retryBefore = elementVisualSignature(getCells());
         await dragThrough(elements, { stepDelay: 8 });
         if (!(await waitForVisualChange(getCells, retryBefore, RENDER_SETTLE_TIMEOUT_MS))) {
-          if (acceptedSolutionVisible()) return;
+          if (acceptedSolutionVisible()) break;
           throw new Error(`Patches rectangle ${clueIndex + 1} did not render after retrying.`);
         }
       }

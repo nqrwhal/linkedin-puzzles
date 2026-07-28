@@ -6,7 +6,6 @@ const inputTabs = new Set();
 const inputTimers = new Map();
 const captureTabs = new Set();
 const captureTimers = new Map();
-const captureDocuments = new Map();
 const puzzleRoutes = new Map();
 const pageScanTimes = new Map();
 const pendingPuzzleResponses = new Map();
@@ -209,12 +208,11 @@ function armCaptureStop(tabId) {
   }, 15000));
 }
 
-async function startCapture(tabId, documentId, url) {
+async function startCapture(tabId, url) {
   syncPuzzleRoute(tabId, url);
   // Navigation and route-change listeners clear stale sources before the new
   // response arrives. Never clear here: onUpdated may already have captured
   // this document's one-shot puzzle payload before its content script starts.
-  captureDocuments.set(tabId, documentId);
   await primeCapture(tabId, url);
 }
 
@@ -251,7 +249,7 @@ async function handleMessage(message, sender) {
   if (!Number.isInteger(tabId)) throw new Error("The solver could not identify this tab.");
 
   if (message?.type === "lls-capture-start") {
-    await startCapture(tabId, sender.documentId || `${sender.frameId || 0}:${sender.url || ""}`, sender.url);
+    await startCapture(tabId, sender.url);
     return { ok: true };
   }
 
@@ -408,7 +406,6 @@ chrome.debugger.onEvent.addListener((source, method, params) => {
 });
 
 chrome.tabs?.onRemoved.addListener((tabId) => {
-  captureDocuments.delete(tabId);
   puzzleRoutes.delete(tabId);
   pageScanTimes.delete(tabId);
   puzzleSources.delete(tabId);
@@ -418,7 +415,6 @@ chrome.tabs?.onRemoved.addListener((tabId) => {
 chrome.tabs?.onUpdated.addListener((tabId, changeInfo, tab) => {
   const url = changeInfo.url || tab?.url || "";
   if (changeInfo.status === "loading") {
-    captureDocuments.delete(tabId);
     puzzleSources.delete(tabId);
     pendingPuzzleResponses.delete(tabId);
     pageScanTimes.delete(tabId);
@@ -436,7 +432,6 @@ chrome.tabs?.onUpdated.addListener((tabId, changeInfo, tab) => {
     }
     return;
   }
-  captureDocuments.delete(tabId);
   puzzleRoutes.delete(tabId);
   pageScanTimes.delete(tabId);
   puzzleSources.delete(tabId);

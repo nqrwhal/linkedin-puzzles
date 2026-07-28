@@ -23,6 +23,7 @@
   let solveButton;
   let currentGame = null;
   let solving = false;
+  let solveSession = null;
   let solveSuccessMessage = "Solved!";
   let lastUrl = location.href;
   let trustedInputActive = false;
@@ -38,6 +39,7 @@
   const SIGNED_IN_SAVE_SETTLE_MS = 2000;
   const SIGNED_IN_COMPLETION_FLOORS_MS = {
     pinpoint: 1800,
+    crossclimb: 4000,
     wend: 2200,
     queens: 6000,
     tango: 3200,
@@ -46,8 +48,27 @@
     patches: 6000,
   };
   const PUZZLE_SOURCE_PATTERN = /blueprintGamePuzzle|pinpointGamePuzzle|crossClimbGamePuzzle|wendGamePuzzle|"solutions"\s*:|"solution"\s*:|"answer"\s*:|solutionWords|puzzleLetters|rungs/;
-  const delay = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
   const nextFrame = () => new Promise((resolve) => requestAnimationFrame(() => requestAnimationFrame(resolve)));
+
+  function assertStillSolving() {
+    if (!solveSession || getGame() !== solveSession.game) {
+      throw new Error("Solve cancelled because the puzzle page changed.");
+    }
+  }
+
+  function dropSolveSessionIfStale() {
+    if (solving && solveSession && getGame() !== solveSession.game) solveSession = null;
+  }
+
+  async function delay(ms) {
+    const end = Date.now() + Math.max(0, ms);
+    while (true) {
+      if (solving) assertStillSolving();
+      const remaining = end - Date.now();
+      if (remaining <= 0) return;
+      await new Promise((resolve) => setTimeout(resolve, Math.min(100, remaining)));
+    }
+  }
 
   function isSignedInGamePage() {
     return window.top === window && /^\/games\/(?!view\/)/.test(location.pathname);
@@ -85,24 +106,39 @@
         return false;
       }
     };
+    if (solving) assertStillSolving();
     if (test()) return true;
-    return new Promise((resolve) => {
+    return new Promise((resolve, reject) => {
       let finished = false;
       let checkQueued = false;
       let observer;
       let poll;
       let timeout;
-      const finish = (value) => {
-        if (finished) return;
-        finished = true;
+      const cleanup = () => {
         observer?.disconnect();
         clearInterval(poll);
         clearTimeout(timeout);
+      };
+      const finish = (value) => {
+        if (finished) return;
+        finished = true;
+        cleanup();
         resolve(value);
+      };
+      const fail = (error) => {
+        if (finished) return;
+        finished = true;
+        cleanup();
+        reject(error);
       };
       const check = () => {
         if (finished) return;
-        if (test()) finish(true);
+        try {
+          if (solving) assertStillSolving();
+          if (test()) finish(true);
+        } catch (error) {
+          fail(error);
+        }
       };
       const scheduleCheck = () => {
         if (finished || checkQueued) return;
@@ -120,7 +156,15 @@
         subtree: true,
       });
       poll = setInterval(check, Math.max(DOM_POLL_FLOOR_MS, intervalMs));
-      timeout = setTimeout(() => finish(test()), timeoutMs);
+      timeout = setTimeout(() => {
+        if (finished) return;
+        try {
+          if (solving) assertStillSolving();
+          finish(test());
+        } catch (error) {
+          fail(error);
+        }
+      }, timeoutMs);
     });
   }
 
@@ -226,6 +270,7 @@
   }
 
   async function beginTrustedInput() {
+    assertStillSolving();
     if (!globalThis.chrome?.runtime?.id) throw new Error("The extension input service is unavailable. Reload this page.");
     const response = await chrome.runtime.sendMessage({ type: "lls-input-start" });
     if (!response?.ok) throw new Error(response?.error || "Chrome could not start puzzle input.");
@@ -243,6 +288,7 @@
   }
 
   async function mouseSequence(steps, intervalMs = 0) {
+    assertStillSolving();
     if (!steps.length) return;
     if (!trustedInputActive) throw new Error("Trusted mouse input is unavailable.");
     markTrustedInput();
@@ -263,6 +309,7 @@
   }
 
   async function clickElement(element) {
+    assertStillSolving();
     element.scrollIntoView({ block: "nearest", inline: "nearest" });
     const rect = element.getBoundingClientRect();
     const point = { x: rect.left + rect.width / 2, y: rect.top + rect.height / 2 };
@@ -274,6 +321,7 @@
   }
 
   async function insertText(text) {
+    assertStillSolving();
     if (!trustedInputActive) throw new Error("Trusted keyboard input is unavailable.");
     markTrustedInput();
     const response = await chrome.runtime.sendMessage({ type: "lls-input-text", text });
@@ -281,6 +329,7 @@
   }
 
   async function pressKey(key, code, keyCode, modifiers = 0) {
+    assertStillSolving();
     if (!trustedInputActive) throw new Error("Trusted keyboard input is unavailable.");
     markTrustedInput();
     const response = await chrome.runtime.sendMessage({ type: "lls-input-key", key, code, keyCode, modifiers });
@@ -288,6 +337,7 @@
   }
 
   async function pressKeys(keys, intervalMs = 20) {
+    assertStillSolving();
     if (!trustedInputActive) throw new Error("Trusted keyboard input is unavailable.");
     markTrustedInput();
     const response = await chrome.runtime.sendMessage({
@@ -535,6 +585,7 @@
     if (!topRow || !bottomRow) throw new Error("Crossclimb did not unlock its final rows.");
 
     setStatus("Entering the final pair…", "working");
+    await waitForSignedInCompletion("crossclimb");
     await fillLetterRow(topRow, ordered[0].word);
     await fillLetterRow(bottomRow, ordered[ordered.length - 1].word);
     if (!(await finishCrossclimb())) throw new Error("LinkedIn did not accept the Crossclimb ladder.");
@@ -1134,6 +1185,7 @@
       return;
     }
     solving = true;
+    solveSession = { game };
     solveStartedAt = Date.now();
     solveFirstInputAt = 0;
     solveButton.blur();
@@ -1146,6 +1198,7 @@
       await beginTrustedInput();
       await dismissTutorialDialog();
       await GAME_SOLVERS[game]();
+      assertStillSolving();
       setStatus(solveSuccessMessage, "success");
     } catch (error) {
       console.error("LinkedIn Puzzle Solver:", error);
@@ -1153,6 +1206,7 @@
     } finally {
       await endTrustedInput();
       solving = false;
+      solveSession = null;
       solveStartedAt = 0;
       solveFirstInputAt = 0;
       solveButton.disabled = false;
@@ -1170,9 +1224,8 @@
       updatePanel();
     } else if (!solving && getGame() !== currentGame) {
       updatePanel();
-    } else if (currentGame && status?.textContent === "Waiting for the board.") {
-      setStatus("Board recognized. Ready to solve.");
     }
+    dropSolveSessionIfStale();
   });
   observer.observe(document.documentElement, { childList: true, subtree: true });
   const navigationPoll = setInterval(() => {
@@ -1180,6 +1233,7 @@
       lastUrl = location.href;
       updatePanel();
     }
+    dropSolveSessionIfStale();
   }, 2000);
   addEventListener("pagehide", () => {
     observer.disconnect();

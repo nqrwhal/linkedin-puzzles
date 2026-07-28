@@ -61,13 +61,15 @@ test("Wend touch input stays page-local instead of depending on the service work
 
 test("word-game sources clear before navigation and survive content-script startup", () => {
   assert.match(background, /changeInfo\.status === "loading"[\s\S]*?puzzleSources\.delete\(tabId\)/);
-  assert.match(background, /async function startCapture[\s\S]*?captureDocuments\.set\(tabId, documentId\)[\s\S]*?await primeCapture/);
+  assert.match(background, /async function startCapture\(tabId, url\)[\s\S]*?await primeCapture/);
+  assert.doesNotMatch(background, /captureDocuments/);
   assert.doesNotMatch(background, /async function startCapture[\s\S]{0,500}?puzzleSources\.delete/);
 });
 
 test("signed-in games pace their final action and verify saves", () => {
-  assert.match(content, /SIGNED_IN_COMPLETION_FLOORS_MS = \{[\s\S]*?pinpoint:[\s\S]*?wend:[\s\S]*?queens: 6000[\s\S]*?tango:[\s\S]*?zip:[\s\S]*?"mini-sudoku":[\s\S]*?patches: 6000/);
+  assert.match(content, /SIGNED_IN_COMPLETION_FLOORS_MS = \{[\s\S]*?pinpoint:[\s\S]*?crossclimb: 4000[\s\S]*?wend:[\s\S]*?queens: 6000[\s\S]*?tango:[\s\S]*?zip:[\s\S]*?"mini-sudoku":[\s\S]*?patches: 6000/);
   assert.match(content, /waitForSignedInCompletion\("pinpoint"\)/);
+  assert.match(content, /waitForSignedInCompletion\("crossclimb"\)/);
   assert.match(content, /waitForSignedInCompletion\("wend"\)/);
   assert.match(content, /waitForSignedInCompletion\("queens"\)/);
   assert.match(content, /waitForSignedInCompletion\("tango"\)/);
@@ -79,6 +81,16 @@ test("signed-in games pace their final action and verify saves", () => {
   assert.match(content, /queensCells:[\s\S]*?break queensCells[\s\S]*?waitForAcceptedSolution/);
   assert.match(content, /solveFirstInputAt \|\| solveStartedAt/);
   assert.match(content, /issue saving your game/);
+});
+
+test("solves abort when the puzzle page leaves the active game", () => {
+  assert.match(content, /let solveSession = null/);
+  assert.match(content, /function assertStillSolving\([\s\S]*?Solve cancelled because the puzzle page changed/);
+  assert.match(content, /solveSession = \{ game \}/);
+  assert.match(content, /function dropSolveSessionIfStale/);
+  assert.match(content, /async function mouseSequence[\s\S]*?assertStillSolving\(\)/);
+  assert.match(content, /async function delay[\s\S]*?if \(solving\) assertStillSolving\(\)/);
+  assert.doesNotMatch(content, /Waiting for the board\."\)/);
 });
 
 test("Tango maps LinkedIn's current Sun and Moon markup to its click cycle", () => {

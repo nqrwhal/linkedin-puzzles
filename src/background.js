@@ -11,6 +11,53 @@ const pageScanTimes = new Map();
 const pendingPuzzleResponses = new Map();
 const puzzleSources = new Map();
 
+// Word-game puzzle payloads arrive once per navigation and are absent from
+// the rendered DOM, so network capture stays attached for the whole word-game
+// visit instead of a short window that can miss the response.
+const CAPTURE_LEASE_MS = 15 * 60 * 1000;
+const MAX_PERSISTED_SOURCE_CHARS = 6 * 1024 * 1024;
+
+let sessionStateLoaded = null;
+
+function loadSessionState() {
+  if (!sessionStateLoaded) {
+    sessionStateLoaded = chrome.storage.session?.get("llsPuzzleState").then((state) => {
+      // A restarted service worker loses its in-memory maps; restore the
+      // captured sources and routes so a slow solve still finds its data.
+      for (const [tabId, entries] of Object.entries(state?.llsPuzzleState?.sources || {})) {
+        if (Array.isArray(entries) && !puzzleSources.has(Number(tabId))) puzzleSources.set(Number(tabId), entries);
+      }
+      for (const [tabId, route] of Object.entries(state?.llsPuzzleState?.routes || {})) {
+        if (!puzzleRoutes.has(Number(tabId))) puzzleRoutes.set(Number(tabId), route);
+      }
+    }).catch(() => {
+      // In-memory capture still covers pages solved in this service worker run.
+    });
+  }
+  return sessionStateLoaded;
+}
+
+function persistSessionState() {
+  if (!chrome.storage.session) return;
+  const sources = {};
+  for (const [tabId, entries] of puzzleSources) {
+    const kept = [];
+    let total = 0;
+    for (let index = entries.length - 1; index >= 0; index -= 1) {
+      const entry = entries[index];
+      if (total + entry.text.length > MAX_PERSISTED_SOURCE_CHARS) break;
+      total += entry.text.length;
+      kept.unshift(entry);
+    }
+    if (kept.length) sources[tabId] = kept;
+  }
+  const routes = {};
+  for (const [tabId, route] of puzzleRoutes) routes[tabId] = route;
+  chrome.storage.session.set({ llsPuzzleState: { sources, routes } }).catch(() => {
+    // Exceeding the session quota only costs restart durability.
+  });
+}
+
 function puzzleRoute(url) {
   const match = String(url || "").match(/^https:\/\/www\.linkedin\.com\/games\/(?:view\/)?([^/?#]+)/);
   return match?.[1] || "";
@@ -24,6 +71,7 @@ function syncPuzzleRoute(tabId, url) {
     puzzleSources.delete(tabId);
     pendingPuzzleResponses.delete(tabId);
     pageScanTimes.delete(tabId);
+    persistSessionState();
   }
   puzzleRoutes.set(tabId, route);
 }
@@ -119,6 +167,14 @@ async function ensureAttached(tabId) {
   if (!attachPromises.has(tabId)) {
     const pending = chrome.debugger.attach({ tabId }, "1.3").then(() => {
       attachedTabs.add(tabId);
+    }).catch((error) => {
+      // A restarted service worker has no memory of its own attachment; the
+      // debugger link itself survives, so treat that case as attached.
+      if (/already attached/i.test(String(error?.message || error))) {
+        attachedTabs.add(tabId);
+        return;
+      }
+      throw error;
     }).finally(() => {
       attachPromises.delete(tabId);
     });
@@ -208,7 +264,13 @@ function armCaptureStop(tabId) {
     captureTimers.delete(tabId);
     pendingPuzzleResponses.delete(tabId);
     void detachIfIdle(tabId);
-  }, 15000));
+  }, CAPTURE_LEASE_MS));
+}
+
+function stopCapture(tabId) {
+  clearTimer(captureTimers, tabId);
+  captureTabs.delete(tabId);
+  void detachIfIdle(tabId);
 }
 
 async function startCapture(tabId, url) {
@@ -245,11 +307,15 @@ function rememberPuzzleSource(tabId, text) {
   if (!entries.some((entry) => entry.text === text)) entries.push({ text, capturedAt: Date.now() });
   while (entries.length > 6 || entries.reduce((total, entry) => total + entry.text.length, 0) > 12 * 1024 * 1024) entries.shift();
   puzzleSources.set(tabId, entries);
+  // Fresh responses mean the route is still delivering, so renew the lease.
+  if (captureTabs.has(tabId)) armCaptureStop(tabId);
+  persistSessionState();
 }
 
 async function handleMessage(message, sender) {
   const tabId = sender.tab?.id;
   if (!Number.isInteger(tabId)) throw new Error("The solver could not identify this tab.");
+  await loadSessionState();
 
   if (message?.type === "lls-capture-start") {
     await startCapture(tabId, sender.url);
@@ -386,7 +452,9 @@ chrome.debugger.onEvent.addListener((source, method, params) => {
   if (method === "Network.responseReceived") {
     const url = params?.response?.url || "";
     const mimeType = params?.response?.mimeType || "";
-    if (!/^https:\/\/www\.linkedin\.com\/(?:voyager\/api\/|games\/api\/)/.test(url) || !/json/i.test(mimeType)) return;
+    // The puzzle payload's API path has moved before, so accept any LinkedIn
+    // JSON response here; rememberPuzzleSource's content check does the gating.
+    if (!/^https:\/\/www\.linkedin\.com\//.test(url) || !/json/i.test(mimeType)) return;
     if (!pendingPuzzleResponses.has(tabId)) pendingPuzzleResponses.set(tabId, new Set());
     pendingPuzzleResponses.get(tabId).add(params.requestId);
     return;
@@ -412,6 +480,7 @@ chrome.tabs?.onRemoved.addListener((tabId) => {
   puzzleRoutes.delete(tabId);
   pageScanTimes.delete(tabId);
   puzzleSources.delete(tabId);
+  persistSessionState();
   void forceDetach(tabId);
 });
 
@@ -426,17 +495,20 @@ chrome.tabs?.onUpdated.addListener((tabId, changeInfo, tab) => {
   if (/^https:\/\/www\.linkedin\.com\/games\//.test(url)) {
     syncPuzzleRoute(tabId, url);
     if (/^https:\/\/www\.linkedin\.com\/games\/(?:view\/)?(?:pinpoint|crossclimb|wend)(?:\/|[?#]|$)/.test(url)) {
-      // Prime Network capture on the route transition instead of waiting for
-      // the content script. On a cold service worker, that delay can miss the
-      // one response containing Pinpoint or Crossclimb answers.
+      // Keep network capture attached for the whole word-game visit: the
+      // one-shot puzzle response can arrive at any navigation on the route.
       void primeCapture(tabId, url).catch(() => {
         // React props and bootstrap scripts remain available as fallbacks.
       });
+      return;
     }
+    // Logic games never need captured responses, so release the debugger.
+    stopCapture(tabId);
     return;
   }
   puzzleRoutes.delete(tabId);
   pageScanTimes.delete(tabId);
   puzzleSources.delete(tabId);
+  persistSessionState();
   void forceDetach(tabId);
 });

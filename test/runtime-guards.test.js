@@ -30,7 +30,7 @@ test("capture and debugger resources have explicit bounds and cleanup", () => {
   assert.match(background, /pageScanTimes = new Map\(\)[\s\S]*?Date\.now\(\) - lastPageScan >= 750/);
   assert.match(background, /previous && previous !== route[\s\S]*?puzzleSources\.delete\(tabId\)/);
   assert.match(background, /entries\.length > 6[\s\S]*?12 \* 1024 \* 1024/);
-  assert.match(background, /voyager\\\/api\\\/\|games\\\/api\\\//);
+  assert.match(background, /!\/json\/i\.test\(mimeType\)/);
   assert.match(background, /for \(const kind of \["Props", "Fiber"\]\)/);
   assert.match(background, /onUpdated[\s\S]*?primeCapture\(tabId, url\)/);
   assert.match(content, /PUZZLE_DATA_ATTEMPTS = 32/);
@@ -67,21 +67,30 @@ test("word-game sources clear before navigation and survive content-script start
   assert.doesNotMatch(background, /async function startCapture[\s\S]{0,500}?puzzleSources\.delete/);
 });
 
-test("signed-in games pace their final action and verify saves", () => {
-  assert.match(content, /SIGNED_IN_COMPLETION_FLOORS_MS = \{[\s\S]*?pinpoint:[\s\S]*?crossclimb: 4000[\s\S]*?wend:[\s\S]*?queens: 6000[\s\S]*?tango:[\s\S]*?zip:[\s\S]*?"mini-sudoku":[\s\S]*?patches: 6000/);
-  assert.match(content, /waitForSignedInCompletion\("pinpoint"\)/);
-  assert.match(content, /waitForSignedInCompletion\("crossclimb"\)/);
-  assert.match(content, /waitForSignedInCompletion\("wend"\)/);
-  assert.match(content, /waitForSignedInCompletion\("queens"\)/);
-  assert.match(content, /waitForSignedInCompletion\("tango"\)/);
-  assert.match(content, /waitForSignedInCompletion\("zip"\)/);
-  assert.match(content, /pendingCells === 1[\s\S]*?waitForSignedInCompletion\("mini-sudoku"\)/);
-  assert.match(content, /index === path\.length - 1[\s\S]*?waitForSignedInCompletion\("zip"\)/);
-  assert.match(content, /clueIndex === rectangles\.length - 1[\s\S]*?waitForSignedInCompletion\("patches"\)/);
-  assert.match(content, /SIGNED_IN_SAVE_SETTLE_MS = 2000[\s\S]*?waitUntil\(saveErrorVisible, SIGNED_IN_SAVE_SETTLE_MS/);
-  assert.match(content, /queensCells:[\s\S]*?break queensCells[\s\S]*?waitForAcceptedSolution/);
+test("signed-in solves hold only their final move to a two-second floor", () => {
+  assert.match(content, /SOLVE_SAFE_FLOOR_MS = 2000/);
+  assert.match(content, /async function waitForSignedInCompletion\(\)[\s\S]*?SOLVE_SAFE_FLOOR_MS - \(Date\.now\(\) - \(solveFirstInputAt \|\| solveStartedAt\)\)/);
+  assert.doesNotMatch(content, /SIGNED_IN_COMPLETION_FLOORS_MS|SIGNED_IN_ACTION_SETTLE_MS|settleSignedInAction/);
+  const floors = content.match(/waitForSignedInCompletion\(\)/g) || [];
+  assert.ok(floors.length >= 9, `expected one floor per final action, found ${floors.length}`);
+  assert.match(content, /pendingClicks === 1[\s\S]*?await waitForSignedInCompletion\(\)/);
+  assert.match(content, /pendingCells === 1[\s\S]*?await waitForSignedInCompletion\(\)/);
+  assert.match(content, /index === path\.length - 1[\s\S]*?await waitForSignedInCompletion\(\)/);
+  assert.match(content, /clueIndex === rectangles\.length - 1[\s\S]*?await waitForSignedInCompletion\(\)/);
+  assert.match(content, /SIGNED_IN_SAVE_SETTLE_MS = 800[\s\S]*?waitUntil\(saveErrorVisible, SIGNED_IN_SAVE_SETTLE_MS/);
   assert.match(content, /solveFirstInputAt \|\| solveStartedAt/);
   assert.match(content, /issue saving your game/);
+});
+
+test("word-game capture persists for the whole visit and survives worker restarts", () => {
+  assert.match(background, /CAPTURE_LEASE_MS = 15 \* 60 \* 1000/);
+  assert.match(background, /function stopCapture\(tabId\)/);
+  assert.match(background, /stopCapture\(tabId\);\s*\n\s*return;/);
+  assert.match(background, /chrome\.storage\.session\?\.get\("llsPuzzleState"\)/);
+  assert.match(background, /function persistSessionState/);
+  assert.match(background, /await loadSessionState\(\);/);
+  assert.match(background, /already attached/i);
+  assert.match(background, /MAX_PERSISTED_SOURCE_CHARS = 6 \* 1024 \* 1024/);
 });
 
 test("board and puzzle-data detection do not depend on a server-rendered main element", () => {

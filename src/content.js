@@ -35,18 +35,10 @@
   const RENDER_SETTLE_TIMEOUT_MS = 1200;
   const PUZZLE_DATA_ATTEMPTS = 32;
   const PUZZLE_DATA_RETRY_MS = 250;
-  const SIGNED_IN_ACTION_SETTLE_MS = 50;
-  const SIGNED_IN_SAVE_SETTLE_MS = 2000;
-  const SIGNED_IN_COMPLETION_FLOORS_MS = {
-    pinpoint: 1800,
-    crossclimb: 4000,
-    wend: 2200,
-    queens: 6000,
-    tango: 3200,
-    zip: 2800,
-    "mini-sudoku": 3600,
-    patches: 6000,
-  };
+  // LinkedIn accepts saves at a two-to-three second pace: hold only the final
+  // move of each solve until this floor passes and never slow input otherwise.
+  const SOLVE_SAFE_FLOOR_MS = 2000;
+  const SIGNED_IN_SAVE_SETTLE_MS = 800;
   const PUZZLE_SOURCE_PATTERN = /blueprintGamePuzzle|pinpointGamePuzzle|crossClimbGamePuzzle|wendGamePuzzle|"solutions"\s*:|"solution"\s*:|"answer"\s*:|solutionWords|puzzleLetters|rungs/;
   const nextFrame = () => new Promise((resolve) => requestAnimationFrame(() => requestAnimationFrame(resolve)));
 
@@ -78,19 +70,14 @@
     return /issue saving your game|could(?:n[’']t| not) save your game/i.test(document.body?.textContent || "");
   }
 
-  async function waitForSignedInCompletion(game) {
+  async function waitForSignedInCompletion() {
     if (!isSignedInGamePage()) return;
-    const floor = SIGNED_IN_COMPLETION_FLOORS_MS[game] || 0;
-    const remaining = floor - (Date.now() - (solveFirstInputAt || solveStartedAt));
+    const remaining = SOLVE_SAFE_FLOOR_MS - (Date.now() - (solveFirstInputAt || solveStartedAt));
     if (remaining > 0) await delay(remaining);
   }
 
   function markTrustedInput() {
     if (isSignedInGamePage() && !solveFirstInputAt) solveFirstInputAt = Date.now();
-  }
-
-  async function settleSignedInAction(ms = SIGNED_IN_ACTION_SETTLE_MS) {
-    if (isSignedInGamePage()) await delay(ms);
   }
 
   async function waitUntil(
@@ -229,8 +216,9 @@
     panel = document.createElement("aside");
     panel.id = "linkedin-logic-solver";
     panel.setAttribute("aria-label", "LinkedIn Puzzle Solver");
+    const version = globalThis.chrome?.runtime?.getManifest?.().version || "";
     panel.innerHTML = `
-      <div class="lls__eyebrow">Puzzle Solver</div>
+      <div class="lls__eyebrow">Puzzle Solver${version ? ` · ${version}` : ""}</div>
       <div class="lls__title">Detecting puzzle…</div>
       <button class="lls__solve" type="button">Solve puzzle</button>
       <div class="lls__status" role="status" aria-live="polite">Waiting for the board.</div>
@@ -443,7 +431,7 @@
     }
     setStatus("Submitting the category…", "working");
     await replaceInputText(input, solutions[0]);
-    await waitForSignedInCompletion("pinpoint");
+    await waitForSignedInCompletion();
     const guessButton = gameControls("button").find((button) => (button.textContent || "").trim() === "Guess");
     if (guessButton) await clickElement(guessButton);
     else await pressKey("Enter", "Enter", 13);
@@ -613,7 +601,7 @@
     if (!topRow || !bottomRow) throw new Error("Crossclimb did not unlock its final rows.");
 
     setStatus("Entering the final pair…", "working");
-    await waitForSignedInCompletion("crossclimb");
+    await waitForSignedInCompletion();
     await fillLetterRow(topRow, ordered[0].word);
     await fillLetterRow(bottomRow, ordered[ordered.length - 1].word);
     if (!(await finishCrossclimb())) throw new Error("LinkedIn did not accept the Crossclimb ladder.");
@@ -697,7 +685,7 @@
           || Boolean(liveCells[index]?.querySelector(`[data-testid='cell-${index}-selected']`)),
         );
       };
-      if (pathIndex === puzzle.paths.length - 1) await waitForSignedInCompletion("wend");
+      if (pathIndex === puzzle.paths.length - 1) await waitForSignedInCompletion();
       let committed = pathRendered();
       for (let attempt = 0; attempt < 3 && !committed; attempt += 1) {
         if (attempt > 0) await delay(250);
@@ -708,7 +696,6 @@
         committed = await waitUntil(pathRendered, 1800, 50);
       }
       if (!committed) throw new Error(`Wend word ${pathIndex + 1} did not commit after three gestures.`);
-      await settleSignedInAction(120);
       if (/\/results\/?$/.test(location.pathname)) return;
     }
     if (!(await waitForAcceptedSolution(8000)) && !document.querySelector("a[href*='/games/wend/results']")) {
@@ -766,23 +753,21 @@
         const clicks = cell.state === "queen" ? 0 : cell.state === "cross" ? 1 : 2;
         for (let count = 0; count < clicks; count += 1) {
           const previous = cell.state;
-          if (pendingClicks === 1) await waitForSignedInCompletion("queens");
+          if (pendingClicks === 1) await waitForSignedInCompletion();
           await clickElement(cell.element);
           cell = await waitForQueensChange(index, previous);
           if (!cell && acceptedSolutionVisible()) break queensCells;
           if (!cell || cell.state === previous) throw new Error(`Queens cell ${index + 1} did not accept its value.`);
           pendingClicks = Math.max(0, pendingClicks - 1);
-          await settleSignedInAction();
         }
       } else if (cell.state === "queen") {
         const previous = cell.state;
-        if (pendingClicks === 1) await waitForSignedInCompletion("queens");
+        if (pendingClicks === 1) await waitForSignedInCompletion();
         await clickElement(cell.element);
         cell = await waitForQueensChange(index, previous);
         if (!cell && acceptedSolutionVisible()) break;
         if (!cell || cell.state === previous) throw new Error(`Queens cell ${index + 1} did not clear.`);
         pendingClicks = Math.max(0, pendingClicks - 1);
-        await settleSignedInAction();
       }
     }
     if (!(await waitForAcceptedSolution())) throw new Error("LinkedIn did not accept the Queens solution.");
@@ -863,11 +848,10 @@
         const previous = tangoValue(element);
         const clicksRemaining = solvers.tangoClickDistance(previous, target);
         if (!clicksRemaining) break;
-        if (pendingClicks === 1) await waitForSignedInCompletion("tango");
+        if (pendingClicks === 1) await waitForSignedInCompletion();
         await clickElement(element);
         element = await waitForTangoChange(index, previous);
         pendingClicks = Math.max(0, pendingClicks - 1);
-        await settleSignedInAction();
         attempts += 1;
       }
       if (!element) {
@@ -995,13 +979,12 @@
       const numberButton = document.querySelector(`button.sudoku-input-button[data-number='${solution[index]}']`)
         || gameControls("button").find((button) => (button.textContent || "").trim() === String(solution[index]));
       if (!numberButton) throw new Error(`Mini Sudoku number button ${solution[index]} is missing.`);
-      if (pendingCells === 1) await waitForSignedInCompletion("mini-sudoku");
+      if (pendingCells === 1) await waitForSignedInCompletion();
       await clickElement(numberButton);
       if (!(await waitForSudokuValue(index, solution[index], board.size))) {
         throw new Error(`Mini Sudoku cell ${index + 1} did not accept its value.`);
       }
       pendingCells -= 1;
-      await settleSignedInAction();
       if (acceptedSolutionVisible()) return;
     }
     if (!(await waitForAcceptedSolution())) throw new Error("LinkedIn did not accept the Mini Sudoku solution.");
@@ -1100,7 +1083,7 @@
       if (elements.some((element) => !element)) throw new Error("A Patches rectangle cell is missing.");
       const getCells = () => [...document.querySelectorAll("[data-cell-idx][data-testid^='cell-'][aria-label]")];
       const before = elementVisualSignature(getCells());
-      if (clueIndex === rectangles.length - 1) await waitForSignedInCompletion("patches");
+      if (clueIndex === rectangles.length - 1) await waitForSignedInCompletion();
       await dragThrough(elements, { stepDelay: 5 });
       if (!(await waitForVisualChange(getCells, before, RENDER_SETTLE_TIMEOUT_MS))) {
         if (acceptedSolutionVisible()) break;
@@ -1180,7 +1163,7 @@
     const path = solvers.solveZip(board);
     setStatus("Connecting the path…", "working");
     for (let index = 0; index < path.length; index += 1) {
-      if (index === path.length - 1) await waitForSignedInCompletion("zip");
+      if (index === path.length - 1) await waitForSignedInCompletion();
       const cell = findCellByIndex(path[index]);
       if (!cell) throw new Error(`Zip path cell ${index + 1} is missing.`);
       await clickElement(cell);
@@ -1188,7 +1171,6 @@
         acceptedSolutionVisible() || isZipCellFilled(findCellByIndex(path[index])),
       1800, 50);
       if (!connected) throw new Error(`Zip did not connect path cell ${index + 1}.`);
-      await settleSignedInAction(60);
       if (acceptedSolutionVisible()) break;
     }
     if (!(await waitForAcceptedSolution(8000))) throw new Error("LinkedIn did not accept the Zip path.");

@@ -29,13 +29,13 @@ Supported games:
 
 The solver follows LinkedIn's in-page navigation, so moving between games from the games hub or a game's sidebar re-detects the new board and its puzzle data without reloading the tab. If a board is still mounting, solvers wait a few seconds for it before reporting that it is not visible.
 
-Chrome briefly shows a debugging banner for word games and while the extension sends trusted puzzle input. The initial word-game connection reads only LinkedIn's own puzzle response and disconnects within 15 seconds; solve input disconnects as soon as the solve finishes. If the solver card does not appear after updating the extension, reload both the extension on `chrome://extensions` and the game tab.
+Chrome shows a debugging banner while the extension reads word-game data or sends trusted puzzle input. Word-game pages keep that read connection open for the whole visit because LinkedIn delivers a puzzle's answers exactly once per navigation and never renders them into the page; it detaches on other pages. If the solver card does not appear after updating the extension, reload both the extension on `chrome://extensions` and the game tab — the card's eyebrow shows the running version so you can confirm the update loaded.
 
 For incognito play, enable **Allow in Incognito** on the extension's Details page. The solver card supports LinkedIn's iframe-based incognito layout. For word games, the extension can read the puzzle object from LinkedIn's rendered page state when an incognito page does not expose the answer data in HTML or the network response.
 
 To keep browsing during a solve, put the puzzle in a separate Chrome window and leave that window open; a tab group only organizes tabs and does not isolate foreground focus or background throttling. After pressing **Solve puzzle**, you can switch to your normal Chrome window. The solver uses tab-targeted trusted input and mutation-driven board checks so it does not depend on rapid timers in the unfocused puzzle window.
 
-The extension does not make its own network requests, collect data, or send puzzle contents anywhere. It keeps only matching puzzle data from LinkedIn's current page in memory. Chrome's `debugger` permission is used to read that already-delivered response and create trusted mouse and keyboard input; capture has a 15-second timeout and solve input has a 30-second safety timeout.
+The extension does not make its own network requests, collect data, or send puzzle contents anywhere. It keeps only matching puzzle data from LinkedIn's current page in memory and in Chrome's session storage for the background worker. Chrome's `debugger` permission is used to read that already-delivered response and create trusted mouse and keyboard input; capture stays attached on word-game tabs for up to fifteen minutes and solve input has a 30-second safety timeout.
 
 ## How it works
 
@@ -52,7 +52,7 @@ The extension reads the same accessibility labels and cell metadata that LinkedI
 
 Word-game parsers preserve valid embedded JSON before peeling wrapper escaping, so quoted clue and answer text cannot corrupt otherwise complete puzzle data.
 
-Input is paced where LinkedIn can safely consume it: Zip reads rendered wall geometry and connects the solved route one verified cell at a time; Wend dispatches the board's touch contract locally and confirms every letter cell locked, retrying each word with progressively slower gestures; Patches uses compact trusted drag sequences with mutation-driven settling; and Crossclimb advances after React has rendered each letter or row move. Signed-in Queens and Patches solves hold only their final move until LinkedIn's save window is open, then wait for any late save rejection before reporting success.
+Input is paced where LinkedIn can safely consume it: Zip reads rendered wall geometry and connects the solved route one verified cell at a time; Wend dispatches the board's touch contract locally and confirms every letter cell locked, retrying each word with progressively slower gestures; Patches uses compact trusted drag sequences with mutation-driven settling; and Crossclimb advances after React has rendered each letter or row move. Every signed-in solve holds only its final move until a two-second safety floor passes and then watches briefly for a late save rejection before reporting success; all other input runs as fast as the board confirms it, so a solve finishes in about two to three seconds.
 
 During a solve, the extension panel is removed from pointer hit testing so a physical cursor left over the Solve button cannot interrupt trusted Crossclimb drags. Board waits use mutation signals with a low-frequency fallback and lag-tolerant deadlines; Patches also verifies each rendered rectangle and retries once before continuing.
 

@@ -51,7 +51,8 @@ test("Wend uses bounded word gestures and verifies every path cell", () => {
   assert.match(content, /for \(const element of elements\.slice\(1\)\)[\s\S]*?dispatch\("touchmove"/);
   assert.match(content, /solveWendGame[\s\S]*?path\.every\([\s\S]*?data-cell-is-locked/);
   assert.match(content, /let committed = pathRendered\(\)/);
-  assert.match(content, /attempt < 2[\s\S]*?Wend word \$\{pathIndex \+ 1\} did not commit after two gestures/);
+  assert.match(content, /attempt < 3[\s\S]*?Wend word \$\{pathIndex \+ 1\} did not commit after three gestures/);
+  assert.match(content, /waitForBoard\(\(\) => findWendGrid\(puzzle\), RENDER_SETTLE_TIMEOUT_MS\)/);
 });
 
 test("Wend touch input stays page-local instead of depending on the service worker", () => {
@@ -81,6 +82,25 @@ test("signed-in games pace their final action and verify saves", () => {
   assert.match(content, /queensCells:[\s\S]*?break queensCells[\s\S]*?waitForAcceptedSolution/);
   assert.match(content, /solveFirstInputAt \|\| solveStartedAt/);
   assert.match(content, /issue saving your game/);
+});
+
+test("board and puzzle-data detection do not depend on a server-rendered main element", () => {
+  assert.doesNotMatch(content, /querySelectorAll\("main (?:div|button|input)"\)/);
+  assert.doesNotMatch(content, /querySelector\(`main /);
+  assert.match(content, /function gameAreaText\(\)[\s\S]*?document\.body\?\.textContent/);
+  assert.match(content, /async function waitForBoard\(/);
+  assert.match(content, /waitForBoard\(parseQueensBoard\)/);
+  assert.match(content, /waitForBoard\(parseTangoBoard\)/);
+  assert.match(content, /waitForBoard\(parseSudokuBoard\)/);
+  assert.match(content, /waitForBoard\(parseZipBoard\)/);
+  assert.match(content, /waitForBoard\(parsePatchesBoard\)/);
+  assert.match(content, /waitForBoard\(\(\) => findWendGrid\(puzzle\)\)/);
+  assert.match(content, /#linkedin-logic-solver, \[role='dialog'\], \[aria-modal='true'\], \[aria-hidden='true'\]/);
+  assert.match(content, /gameControls\("button"\)\.find/);
+  assert.match(content, /gameControls\("input"\)/);
+  assert.match(background, /document\.body\.querySelectorAll\("\*"\)/);
+  assert.match(background, /MAX_SCAN_ELEMENTS = 4000/);
+  assert.match(background, /MAX_INSPECTED = 40000/);
 });
 
 test("solves abort when the puzzle page leaves the active game", () => {

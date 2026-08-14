@@ -34,6 +34,9 @@ function capturePagePuzzleSource() {
   const answerKeyPattern = /solutions?|answer|category/;
   const clueKeyPattern = /clues?/;
   const puzzleSourcePattern = /blueprintGamePuzzle|pinpointGamePuzzle|crossClimbGamePuzzle|wendGamePuzzle|"solutions?"\s*:|"answer"\s*:|solutionWords|puzzleLetters|rungs/;
+  const MAX_SCAN_ELEMENTS = 4000;
+  const MAX_INSPECTED = 40000;
+  const MAX_SCAN_DEPTH = 64;
   const seen = new Set();
   const puzzles = new Set();
   let inspected = 0;
@@ -53,7 +56,7 @@ function capturePagePuzzleSource() {
   }
 
   function findReactPuzzles(value, depth = 0) {
-    if (!value || typeof value !== "object" || value instanceof Node || depth > 48 || seen.has(value) || inspected >= 25000) return;
+    if (!value || typeof value !== "object" || value instanceof Node || depth > MAX_SCAN_DEPTH || seen.has(value) || inspected >= MAX_INSPECTED) return;
     seen.add(value);
     inspected += 1;
 
@@ -67,26 +70,26 @@ function capturePagePuzzleSource() {
       if (depth < 12 || /child|sibling|return|props|state|game|puzzle|solution|clue|category/i.test(key)) {
         findReactPuzzles(child, depth + 1);
       }
-      if (puzzles.size >= 12 || inspected >= 25000) return;
+      if (puzzles.size >= 12 || inspected >= MAX_INSPECTED) return;
     }
   }
 
   const main = document.querySelector("main");
-  const pageElements = [...(main?.querySelectorAll("*") || [])].slice(0, 1500);
+  // SPA route renders can mount the game outside <main> or drop <main>
+  // entirely, so sweep the whole body for React props instead of trusting
+  // main's subtree. Keep main first so its closer controls are found sooner.
+  const pageElements = [...document.body.querySelectorAll("*")].slice(0, MAX_SCAN_ELEMENTS);
   const roots = [main, ...pageElements, document.body, document.documentElement].filter(Boolean);
-  // React props attached to the game controls are much closer to the puzzle
-  // payload than the root fiber. Inspect those first so a large LinkedIn app
-  // tree cannot exhaust the traversal budget before we reach the game data.
   for (const kind of ["Props", "Fiber"]) {
     for (const root of roots) {
       for (const key of Object.keys(root)) {
         if (!reactKeyPattern.test(key) || !key.startsWith(`__react${kind}$`)) continue;
         findReactPuzzles(root[key]);
-        if (puzzles.size >= 12 || inspected >= 25000) break;
+        if (puzzles.size >= 12 || inspected >= MAX_INSPECTED) break;
       }
-      if (puzzles.size >= 12 || inspected >= 25000) break;
+      if (puzzles.size >= 12 || inspected >= MAX_INSPECTED) break;
     }
-    if (puzzles.size >= 12 || inspected >= 25000) break;
+    if (puzzles.size >= 12 || inspected >= MAX_INSPECTED) break;
   }
 
   const serializedPuzzles = [];

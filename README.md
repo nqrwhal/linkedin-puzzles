@@ -27,6 +27,8 @@ Supported games:
 2. Wait for the **Puzzle Solver** card to say the board is recognized.
 3. Click **Solve puzzle** and keep the game tab open until the card says **Solved!**.
 
+The solver follows LinkedIn's in-page navigation, so moving between games from the games hub or a game's sidebar re-detects the new board and its puzzle data without reloading the tab. If a board is still mounting, solvers wait a few seconds for it before reporting that it is not visible.
+
 Chrome briefly shows a debugging banner for word games and while the extension sends trusted puzzle input. The initial word-game connection reads only LinkedIn's own puzzle response and disconnects within 15 seconds; solve input disconnects as soon as the solve finishes. If the solver card does not appear after updating the extension, reload both the extension on `chrome://extensions` and the game tab.
 
 For incognito play, enable **Allow in Incognito** on the extension's Details page. The solver card supports LinkedIn's iframe-based incognito layout. For word games, the extension can read the puzzle object from LinkedIn's rendered page state when an incognito page does not expose the answer data in HTML or the network response.
@@ -50,7 +52,7 @@ The extension reads the same accessibility labels and cell metadata that LinkedI
 
 Word-game parsers preserve valid embedded JSON before peeling wrapper escaping, so quoted clue and answer text cannot corrupt otherwise complete puzzle data.
 
-Input is paced where LinkedIn can safely consume it: Zip reads rendered wall geometry and connects the solved route one verified cell at a time; Wend dispatches the board's touch contract locally and confirms every letter cell locked; Patches uses compact trusted drag sequences with mutation-driven settling; and Crossclimb advances after React has rendered each letter or row move. Signed-in Queens and Patches solves hold only their final move until LinkedIn's save window is open, then wait for any late save rejection before reporting success.
+Input is paced where LinkedIn can safely consume it: Zip reads rendered wall geometry and connects the solved route one verified cell at a time; Wend dispatches the board's touch contract locally and confirms every letter cell locked, retrying each word with progressively slower gestures; Patches uses compact trusted drag sequences with mutation-driven settling; and Crossclimb advances after React has rendered each letter or row move. Signed-in Queens and Patches solves hold only their final move until LinkedIn's save window is open, then wait for any late save rejection before reporting success.
 
 During a solve, the extension panel is removed from pointer hit testing so a physical cursor left over the Solve button cannot interrupt trusted Crossclimb drags. Board waits use mutation signals with a low-frequency fallback and lag-tolerant deadlines; Patches also verifies each rendered rectangle and retries once before continuing.
 

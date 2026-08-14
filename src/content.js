@@ -189,6 +189,29 @@
     return acceptedSolutionVisible(includeSeeResults);
   }
 
+  function gameAreaText() {
+    // Client-rendered SPA routes can mount the game outside <main> (or drop
+    // <main> entirely), so fall back to the whole document's text.
+    return document.querySelector("main")?.textContent || document.body?.textContent || "";
+  }
+
+  function gameControls(selector) {
+    // Match the old main-scoped queries' semantics (dialogs included) while
+    // keeping the solver's own panel out of the results.
+    return [...document.querySelectorAll(selector)].filter((element) => !element.closest("#linkedin-logic-solver"));
+  }
+
+  async function waitForBoard(parse, timeoutMs = 3000) {
+    let board = null;
+    const found = await waitUntil(() => {
+      board = parse();
+      return true;
+    }, timeoutMs);
+    if (found && board) return board;
+    // Surface the parser's specific "not visible yet" error on the final miss.
+    return parse();
+  }
+
   function getGame() {
     if (window.top === window && document.querySelector("iframe[src*='/games/view/']")) return null;
     const match = location.pathname.match(/^\/games\/(?:view\/)?(pinpoint|crossclimb|wend|queens|tango|zip|mini-sudoku|patches)(?:\/|$)/);
@@ -409,15 +432,19 @@
   async function solvePinpointGame() {
     const solutions = await parsePuzzleData(solvers.parsePinpointSolutions);
     if (/\/games\/pinpoint\/results\/?$/.test(location.pathname)) return;
-    const input = document.querySelector("input[placeholder='Guess the category...'], input[aria-label='Guess the category...']");
+    let input = null;
+    await waitUntil(() => {
+      input = document.querySelector("input[placeholder='Guess the category...'], input[aria-label='Guess the category...']");
+      return Boolean(input) || gameAreaText().includes("See results");
+    }, 3000);
     if (!input) {
-      if ((document.querySelector("main")?.textContent || "").includes("See results")) return;
+      if (gameAreaText().includes("See results")) return;
       throw new Error("Pinpoint answer field is not visible yet.");
     }
     setStatus("Submitting the category…", "working");
     await replaceInputText(input, solutions[0]);
     await waitForSignedInCompletion("pinpoint");
-    const guessButton = [...document.querySelectorAll("main button")].find((button) => (button.textContent || "").trim() === "Guess");
+    const guessButton = gameControls("button").find((button) => (button.textContent || "").trim() === "Guess");
     if (guessButton) await clickElement(guessButton);
     else await pressKey("Enter", "Enter", 13);
     if (!(await waitForAcceptedSolution(4000))) throw new Error("LinkedIn did not accept the Pinpoint answer.");
@@ -428,7 +455,7 @@
   }
 
   function liveCrossclimbRow(row, rowNumber) {
-    return rowNumber ? document.querySelector(`main [aria-label^='Row ${rowNumber},']`) || row : row;
+    return rowNumber ? document.querySelector(`[aria-label^='Row ${rowNumber},']`) || row : row;
   }
 
   async function waitForCrossclimbLetter(row, rowNumber, index, expected, timeoutMs = RENDER_SETTLE_TIMEOUT_MS) {
@@ -501,7 +528,7 @@
     let resultsButton;
     await waitUntil(() => {
       if (acceptedSolutionVisible(false)) return true;
-      resultsButton = [...document.querySelectorAll("main button")].find(
+      resultsButton = gameControls("button").find(
         (button) => (button.textContent || "").trim() === "See results" && !button.disabled,
       );
       return Boolean(resultsButton);
@@ -518,15 +545,16 @@
     const ordered = rungs.slice().sort((a, b) => a.solutionRungIndex - b.solutionRungIndex);
     const middleRungs = rungs.filter((rung) => rung.solutionRungIndex > 0 && rung.solutionRungIndex < ordered.length - 1);
 
-    const existingInputs = [...document.querySelectorAll("main input")];
+    const existingInputs = gameControls("input");
     if (existingInputs.length && existingInputs.every((input) => input.disabled)) {
       if (await finishCrossclimb()) return;
       throw new Error("LinkedIn has completed Crossclimb but did not expose its results.");
     }
-    let rows = [...document.querySelectorAll(".crossclimb__guess--middle")];
-    if (!rows.length) {
-      throw new Error("Crossclimb rows are not visible yet.");
-    }
+    let rows = await waitForBoard(() => {
+      const found = [...document.querySelectorAll(".crossclimb__guess--middle")];
+      if (!found.length) throw new Error("Crossclimb rows are not visible yet.");
+      return found;
+    });
 
     setStatus("Answering the clues…", "working");
     if (rows.length !== middleRungs.length) throw new Error("Crossclimb clue count does not match its puzzle data.");
@@ -539,7 +567,7 @@
       await clickElement(input);
       let rung;
       await waitUntil(() => {
-        const visibleText = (document.querySelector("main")?.textContent || "").replace(/\s+/g, " ");
+        const visibleText = gameAreaText().replace(/\s+/g, " ");
         rung = middleRungs
           .filter((candidate) => !usedClues.has(candidate.clue))
           .sort((a, b) => b.clue.length - a.clue.length)
@@ -578,8 +606,8 @@
     let topRow;
     let bottomRow;
     await waitUntil(() => {
-      topRow = document.querySelector("main [aria-label^='Row 1,']");
-      bottomRow = document.querySelector(`main [aria-label^='Row ${ordered.length},']`);
+      topRow = document.querySelector("[aria-label^='Row 1,']");
+      bottomRow = document.querySelector(`[aria-label^='Row ${ordered.length},']`);
       return Boolean(topRow?.querySelector("input:not([disabled])") && bottomRow?.querySelector("input:not([disabled])"));
     }, 3000, 25);
     if (!topRow || !bottomRow) throw new Error("Crossclimb did not unlock its final rows.");
@@ -592,9 +620,9 @@
   }
 
   function findWendGrid(puzzle) {
-    const candidates = [...document.querySelectorAll("main div")].filter((element) =>
+    const candidates = [...document.querySelectorAll("div")].filter((element) =>
       element.children.length === puzzle.rows * puzzle.cols
-      && !element.closest("[role='dialog'], [aria-modal='true'], [aria-hidden='true']"),
+      && !element.closest("#linkedin-logic-solver, [role='dialog'], [aria-modal='true'], [aria-hidden='true']"),
     );
     for (const candidate of candidates) {
       const cells = [...candidate.children];
@@ -635,7 +663,7 @@
       targetTouches: touches,
       changedTouches,
     }));
-    const intervalMs = attempt === 0 ? 55 : 75;
+    const intervalMs = [55, 75, 95][attempt] || 95;
     let touch = makeTouch(elements[0]);
     dispatch("touchstart", [touch], [touch]);
     for (const element of elements.slice(1)) {
@@ -643,12 +671,12 @@
       touch = makeTouch(element);
       dispatch("touchmove", [touch], [touch]);
     }
-    const holds = attempt === 0 ? 0 : 1;
+    const holds = attempt;
     for (let index = 0; index < holds; index += 1) {
       await delay(intervalMs);
       dispatch("touchmove", [touch], [touch]);
     }
-    await delay(attempt === 0 ? 80 : 100);
+    await delay([80, 100, 140][attempt] || 140);
     dispatch("touchend", [], [touch]);
   }
 
@@ -658,7 +686,7 @@
     setStatus("Weaving through the words…", "working");
     for (let pathIndex = 0; pathIndex < puzzle.paths.length; pathIndex += 1) {
       const path = puzzle.paths[pathIndex];
-      const cells = findWendGrid(puzzle);
+      const cells = await waitForBoard(() => findWendGrid(puzzle));
       const elements = path.map((index) => cells[index]);
       if (elements.some((element) => !element)) throw new Error("A Wend solution path leaves the grid.");
       const pathRendered = () => {
@@ -671,14 +699,15 @@
       };
       if (pathIndex === puzzle.paths.length - 1) await waitForSignedInCompletion("wend");
       let committed = pathRendered();
-      for (let attempt = 0; attempt < 2 && !committed; attempt += 1) {
-        const liveCells = findWendGrid(puzzle);
+      for (let attempt = 0; attempt < 3 && !committed; attempt += 1) {
+        if (attempt > 0) await delay(250);
+        const liveCells = await waitForBoard(() => findWendGrid(puzzle), RENDER_SETTLE_TIMEOUT_MS);
         const liveElements = path.map((index) => liveCells[index]);
         if (liveElements.some((element) => !element)) throw new Error("A Wend solution path disappeared while solving.");
         await dragWendWord(liveElements, attempt);
         committed = await waitUntil(pathRendered, 1800, 50);
       }
-      if (!committed) throw new Error(`Wend word ${pathIndex + 1} did not commit after two gestures.`);
+      if (!committed) throw new Error(`Wend word ${pathIndex + 1} did not commit after three gestures.`);
       await settleSignedInAction(120);
       if (/\/results\/?$/.test(location.pathname)) return;
     }
@@ -722,7 +751,7 @@
   }
 
   async function solveQueensGame() {
-    const board = parseQueensBoard();
+    const board = await waitForBoard(parseQueensBoard);
     const queenIndexes = new Set(solvers.solveQueens(board));
     let pendingClicks = board.cells.reduce((total, cell, index) => {
       if (queenIndexes.has(index)) return total + (cell.state === "queen" ? 0 : cell.state === "cross" ? 1 : 2);
@@ -818,7 +847,7 @@
   }
 
   async function solveTangoGame() {
-    const board = parseTangoBoard();
+    const board = await waitForBoard(parseTangoBoard);
     const solution = solvers.solveTango(board);
     let pendingClicks = board.cells.reduce((total, element, index) => {
       if (element.matches(":disabled, [aria-disabled='true']")) return total;
@@ -905,8 +934,8 @@
     if (legacy.length) return legacy;
 
     const candidates = [];
-    for (const container of document.querySelectorAll("main div")) {
-      if (container.closest("[role='dialog'], [aria-modal='true'], [aria-hidden='true']")) continue;
+    for (const container of document.querySelectorAll("div")) {
+      if (container.closest("#linkedin-logic-solver, [role='dialog'], [aria-modal='true'], [aria-hidden='true']")) continue;
       const children = [...container.children];
       let cells = [];
       if (children.length === size * size) cells = children;
@@ -949,7 +978,7 @@
   }
 
   async function solveSudokuGame() {
-    const board = parseSudokuBoard();
+    const board = await waitForBoard(parseSudokuBoard);
     const solution = solvers.solveSudoku(board);
     setStatus("Entering digits…", "working");
     let pendingCells = board.cells.reduce((count, cell, index) =>
@@ -964,7 +993,7 @@
       await clickElement(cell);
       await waitForVisualChange(() => findSudokuCells(board.size), beforeSelection, 100);
       const numberButton = document.querySelector(`button.sudoku-input-button[data-number='${solution[index]}']`)
-        || [...document.querySelectorAll("main button")].find((button) => (button.textContent || "").trim() === String(solution[index]));
+        || gameControls("button").find((button) => (button.textContent || "").trim() === String(solution[index]));
       if (!numberButton) throw new Error(`Mini Sudoku number button ${solution[index]} is missing.`);
       if (pendingCells === 1) await waitForSignedInCompletion("mini-sudoku");
       await clickElement(numberButton);
@@ -1056,7 +1085,7 @@
   }
 
   async function solvePatchesGame() {
-    const board = parsePatchesBoard();
+    const board = await waitForBoard(parsePatchesBoard);
     const rectangles = solvers.solvePatches(board);
     setStatus("Drawing patches…", "working");
     for (let clueIndex = 0; clueIndex < rectangles.length; clueIndex += 1) {
@@ -1145,7 +1174,7 @@
 
   async function solveZipGame() {
     if (acceptedSolutionVisible()) return;
-    const board = parseZipBoard();
+    const board = await waitForBoard(parseZipBoard);
     setStatus("Finding the path…", "working");
     await nextFrame();
     const path = solvers.solveZip(board);

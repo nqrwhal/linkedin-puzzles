@@ -40,7 +40,18 @@
   const SOLVE_SAFE_FLOOR_MS = 2000;
   const SIGNED_IN_SAVE_SETTLE_MS = 800;
   const PUZZLE_SOURCE_PATTERN = /blueprintGamePuzzle|pinpointGamePuzzle|crossClimbGamePuzzle|wendGamePuzzle|"solutions"\s*:|"solution"\s*:|"answer"\s*:|solutionWords|puzzleLetters|rungs/;
-  const nextFrame = () => new Promise((resolve) => requestAnimationFrame(() => requestAnimationFrame(resolve)));
+  // requestAnimationFrame never fires in an occluded or background tab, so any
+  // render settle must fall back to a timer instead of waiting on frames.
+  const nextFrame = () => new Promise((resolve) => {
+    let done = false;
+    const finish = () => {
+      if (done) return;
+      done = true;
+      resolve();
+    };
+    requestAnimationFrame(() => requestAnimationFrame(finish));
+    setTimeout(finish, 120);
+  });
 
   function assertStillSolving() {
     if (!solveSession || getGame() !== solveSession.game) {
@@ -209,6 +220,7 @@
     if (!status) return;
     status.textContent = message;
     status.dataset.state = state;
+    chrome.runtime.sendMessage({ type: "lls-debug", text: message }).catch(() => {});
   }
 
   function createPanel() {
@@ -412,6 +424,10 @@
       } catch (error) {
         lastError = error;
       }
+      chrome.runtime.sendMessage({
+        type: "lls-debug",
+        text: `parse attempt ${attempt + 1} failed: ${lastError.message} (local ${localSources.length}, network ${networkSources.length})`,
+      }).catch(() => {});
       await delay(PUZZLE_DATA_RETRY_MS);
     }
     throw lastError;
@@ -533,7 +549,9 @@
     const ordered = rungs.slice().sort((a, b) => a.solutionRungIndex - b.solutionRungIndex);
     const middleRungs = rungs.filter((rung) => rung.solutionRungIndex > 0 && rung.solutionRungIndex < ordered.length - 1);
 
-    const existingInputs = gameControls("input");
+    // Only the game's own letter rows count here; LinkedIn's global search
+    // input would otherwise mask an already-completed board.
+    const existingInputs = gameControls("input").filter((input) => input.closest("[aria-label^='Row']"));
     if (existingInputs.length && existingInputs.every((input) => input.disabled)) {
       if (await finishCrossclimb()) return;
       throw new Error("LinkedIn has completed Crossclimb but did not expose its results.");
@@ -976,8 +994,12 @@
       const beforeSelection = elementVisualSignature(liveCells);
       await clickElement(cell);
       await waitForVisualChange(() => findSudokuCells(board.size), beforeSelection, 100);
-      const numberButton = document.querySelector(`button.sudoku-input-button[data-number='${solution[index]}']`)
-        || gameControls("button").find((button) => (button.textContent || "").trim() === String(solution[index]));
+      let numberButton = null;
+      await waitUntil(() => {
+        numberButton = document.querySelector(`button.sudoku-input-button[data-number='${solution[index]}']`)
+          || gameControls("button").find((button) => (button.textContent || "").trim() === String(solution[index]));
+        return Boolean(numberButton);
+      }, RENDER_SETTLE_TIMEOUT_MS);
       if (!numberButton) throw new Error(`Mini Sudoku number button ${solution[index]} is missing.`);
       if (pendingCells === 1) await waitForSignedInCompletion();
       await clickElement(numberButton);

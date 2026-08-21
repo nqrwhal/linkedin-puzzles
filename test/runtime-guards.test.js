@@ -90,7 +90,19 @@ test("word-game capture persists for the whole visit and survives worker restart
   assert.match(background, /function persistSessionState/);
   assert.match(background, /await loadSessionState\(\);/);
   assert.match(background, /already attached/i);
+  assert.match(background, /Another debugger such as DevTools/);
   assert.match(background, /MAX_PERSISTED_SOURCE_CHARS = 6 \* 1024 \* 1024/);
+  assert.match(background, /method !== "Network\.responseReceived"\) return;\s*\n\s*captureTabs\.add\(tabId\)/);
+});
+
+test("solves keep working in occluded and background tabs", () => {
+  assert.match(content, /requestAnimationFrame\(\(\) => requestAnimationFrame\(finish\)\);\s*\n\s*setTimeout\(finish, 120\)/);
+  assert.doesNotMatch(content, /const nextFrame = \(\) => new Promise\(\(resolve\) => requestAnimationFrame/);
+});
+
+test("completed boards and slow pads do not derail solves", () => {
+  assert.match(content, /gameControls\("input"\)\.filter\(\(input\) => input\.closest\("\[aria-label\^='Row'\]"\)\)/);
+  assert.match(content, /let numberButton = null;[\s\S]*?await waitUntil\(\(\) => \{\s*numberButton =/);
 });
 
 test("board and puzzle-data detection do not depend on a server-rendered main element", () => {

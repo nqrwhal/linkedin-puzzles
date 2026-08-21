@@ -17,6 +17,10 @@ const puzzleSources = new Map();
 const CAPTURE_LEASE_MS = 15 * 60 * 1000;
 const MAX_PERSISTED_SOURCE_CHARS = 6 * 1024 * 1024;
 
+function debug(...args) {
+  console.log("[lls-bg]", ...args);
+}
+
 let sessionStateLoaded = null;
 
 function loadSessionState() {
@@ -167,14 +171,19 @@ async function ensureAttached(tabId) {
   if (!attachPromises.has(tabId)) {
     const pending = chrome.debugger.attach({ tabId }, "1.3").then(() => {
       attachedTabs.add(tabId);
-    }).catch((error) => {
-      // A restarted service worker has no memory of its own attachment; the
-      // debugger link itself survives, so treat that case as attached.
-      if (/already attached/i.test(String(error?.message || error))) {
+    }).catch(async (error) => {
+      if (!/already attached/i.test(String(error?.message || error))) throw error;
+      // A restarted service worker forgets its own attachment while the
+      // debugger link survives. Verify the link really belongs to this
+      // extension before trusting it — a foreign DevTools session also
+      // reports "already attached" but rejects our commands.
+      try {
+        await chrome.debugger.sendCommand({ tabId }, "Runtime.evaluate", { expression: "1" });
         attachedTabs.add(tabId);
         return;
+      } catch {
+        throw new Error("Another debugger such as DevTools is attached to this tab. Close it and solve again.");
       }
-      throw error;
     }).finally(() => {
       attachPromises.delete(tabId);
     });
@@ -301,7 +310,9 @@ async function primeCapture(tabId, url) {
 
 function rememberPuzzleSource(tabId, text) {
   if (typeof text !== "string" || text.length > 4 * 1024 * 1024) return;
-  if (!/(blueprintGamePuzzle|pinpointGamePuzzle|crossClimbGamePuzzle|wendGamePuzzle|"solutions?"\s*:|"answer"\s*:|solutionWords|puzzleLetters|rungs)/.test(text)) return;
+  const matched = text.match(/blueprintGamePuzzle|pinpointGamePuzzle|crossClimbGamePuzzle|wendGamePuzzle|"solutions?"\s*:|"answer"\s*:|solutionWords|puzzleLetters|rungs/);
+  if (!matched) return;
+  debug("puzzle source", tabId, "len", text.length, "marker", matched[0]);
   const cutoff = Date.now() - 15 * 60 * 1000;
   const entries = (puzzleSources.get(tabId) || []).filter((entry) => entry.capturedAt >= cutoff);
   if (!entries.some((entry) => entry.text === text)) entries.push({ text, capturedAt: Date.now() });
@@ -316,6 +327,11 @@ async function handleMessage(message, sender) {
   const tabId = sender.tab?.id;
   if (!Number.isInteger(tabId)) throw new Error("The solver could not identify this tab.");
   await loadSessionState();
+  if (message?.type !== "lls-puzzle-sources") debug("msg", message?.type, "tab", tabId);
+  if (message?.type === "lls-debug") {
+    debug("[page]", message.text);
+    return { ok: true };
+  }
 
   if (message?.type === "lls-capture-start") {
     await startCapture(tabId, sender.url);
@@ -324,11 +340,14 @@ async function handleMessage(message, sender) {
 
   if (message?.type === "lls-puzzle-sources") {
     syncPuzzleRoute(tabId, sender.url);
+    debug("sources req enter", tabId);
     try {
       const frameId = Number.isInteger(sender.frameId) ? sender.frameId : 0;
       const response = await chrome.tabs.sendMessage(tabId, { type: "lls-bootstrap-sources" }, { frameId });
+      debug("sources bootstrap", tabId, (response?.sources || []).length);
       for (const source of response?.sources || []) rememberPuzzleSource(tabId, source);
-    } catch {
+    } catch (error) {
+      debug("sources bootstrap failed", tabId, String(error?.message || error));
       // Network-captured data remains available when the top frame has navigated.
     }
     const lastPageScan = pageScanTimes.get(tabId) || 0;
@@ -336,13 +355,16 @@ async function handleMessage(message, sender) {
       pageScanTimes.set(tabId, Date.now());
       try {
         const frameId = Number.isInteger(sender.frameId) ? sender.frameId : 0;
+        debug("sources scan begin", tabId);
         const results = await chrome.scripting.executeScript({
           target: { tabId, frameIds: [frameId] },
           world: "MAIN",
           func: capturePagePuzzleSource,
         });
+        debug("sources scan done", tabId, (results || []).length);
         for (const result of results || []) rememberPuzzleSource(tabId, result.result);
-      } catch {
+      } catch (error) {
+        debug("sources scan failed", tabId, String(error?.message || error));
         // React's page-world props are an optional fallback; captured responses still work.
       }
     }
@@ -427,9 +449,10 @@ async function handleMessage(message, sender) {
 }
 
 chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
-  void handleMessage(message, sender).then(sendResponse, (error) =>
-    sendResponse({ ok: false, error: error instanceof Error ? error.message : String(error) }),
-  );
+  void handleMessage(message, sender).then(sendResponse, (error) => {
+    debug("handler error", message?.type, String(error?.message || error));
+    sendResponse({ ok: false, error: error instanceof Error ? error.message : String(error) });
+  });
   return true;
 });
 
@@ -447,7 +470,16 @@ chrome.debugger.onDetach.addListener((source) => {
 
 chrome.debugger.onEvent.addListener((source, method, params) => {
   const tabId = source.tabId;
-  if (!Number.isInteger(tabId) || !captureTabs.has(tabId)) return;
+  if (!Number.isInteger(tabId)) return;
+  if (!captureTabs.has(tabId)) {
+    // A restarted service worker drops its capture bookkeeping while the
+    // debugger link and Network domain survive it. Receiving these events
+    // again means capture was ours, so re-arm instead of losing the tab's
+    // one-shot puzzle payloads.
+    if (method !== "Network.responseReceived") return;
+    captureTabs.add(tabId);
+    armCaptureStop(tabId);
+  }
 
   if (method === "Network.responseReceived") {
     const url = params?.response?.url || "";
@@ -490,6 +522,7 @@ chrome.tabs?.onUpdated.addListener((tabId, changeInfo, tab) => {
     puzzleSources.delete(tabId);
     pendingPuzzleResponses.delete(tabId);
     pageScanTimes.delete(tabId);
+    persistSessionState();
   }
   if (!changeInfo.url && changeInfo.status !== "loading") return;
   if (/^https:\/\/www\.linkedin\.com\/games\//.test(url)) {

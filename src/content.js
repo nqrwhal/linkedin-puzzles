@@ -230,11 +230,27 @@
     panel.setAttribute("aria-label", "LinkedIn Puzzle Solver");
     const version = globalThis.chrome?.runtime?.getManifest?.().version || "";
     panel.innerHTML = `
+      <div class="lls__shield"></div>
       <div class="lls__eyebrow">Puzzle Solver${version ? ` · ${version}` : ""}</div>
       <div class="lls__title">Detecting puzzle…</div>
       <button class="lls__solve" type="button">Solve puzzle</button>
       <div class="lls__status" role="status" aria-live="polite">Waiting for the board.</div>
     `;
+    // The panel hangs off <html>, outside LinkedIn's React root, so events the
+    // shield swallows cannot reach the page's handlers in any phase. Real
+    // pointer activity aimed at a parked cursor's panel never leaks through.
+    const shield = panel.querySelector(".lls__shield");
+    for (const type of [
+      "pointerdown", "pointermove", "pointerup", "pointercancel",
+      "mousedown", "mousemove", "mouseup", "click", "dblclick",
+      "mouseover", "mouseenter", "mouseleave", "mouseout",
+      "dragstart", "drag", "drop", "wheel", "contextmenu",
+    ]) {
+      shield.addEventListener(type, (event) => {
+        event.preventDefault();
+        event.stopImmediatePropagation();
+      }, { capture: true });
+    }
     document.documentElement.appendChild(panel);
     title = panel.querySelector(".lls__title");
     status = panel.querySelector(".lls__status");
@@ -331,9 +347,16 @@
     if (!response?.ok) throw new Error(response?.error || "Chrome could not send puzzle input.");
   }
 
+  function elementFullyInView(element) {
+    const rect = element.getBoundingClientRect();
+    return rect.top >= 0 && rect.left >= 0 && rect.bottom <= window.innerHeight && rect.right <= window.innerWidth;
+  }
+
   async function clickElement(element) {
     assertStillSolving();
-    element.scrollIntoView({ block: "nearest", inline: "nearest" });
+    // Scrolling under a parked physical cursor makes Chrome dispatch real
+    // boundary events into the page; only scroll when the target needs it.
+    if (!elementFullyInView(element)) element.scrollIntoView({ block: "nearest", inline: "nearest" });
     const rect = element.getBoundingClientRect();
     const point = { x: rect.left + rect.width / 2, y: rect.top + rect.height / 2 };
     await mouseSequence([
@@ -447,7 +470,6 @@
     }
     setStatus("Submitting the category…", "working");
     await replaceInputText(input, solutions[0]);
-    await waitForSignedInCompletion();
     const guessButton = gameControls("button").find((button) => (button.textContent || "").trim() === "Guess");
     if (guessButton) await clickElement(guessButton);
     else await pressKey("Enter", "Enter", 13);

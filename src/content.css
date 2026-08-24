@@ -30,6 +30,24 @@
   user-select: none;
 }
 
+/* A parked physical cursor still emits real moves, hovers, and stray clicks.
+   While trusted input runs, a transparent shield over the panel (plus a small
+   halo) swallows them so they never fall through to LinkedIn's handlers; the
+   synthetic input targets game coordinates and never crosses the shield. */
+#linkedin-logic-solver .lls__shield {
+  display: none;
+  position: absolute;
+  inset: -14px;
+  border-radius: 22px;
+  background: transparent;
+  pointer-events: auto;
+}
+
+#linkedin-logic-solver[data-solving="true"] .lls__shield,
+#linkedin-logic-solver[data-dragging="true"] .lls__shield {
+  display: block;
+}
+
 #linkedin-logic-solver .lls__eyebrow {
   margin-bottom: 4px;
   color: var(--lls-green);

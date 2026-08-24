@@ -72,7 +72,8 @@ test("signed-in solves hold only their final move to a two-second floor", () => 
   assert.match(content, /async function waitForSignedInCompletion\(\)[\s\S]*?SOLVE_SAFE_FLOOR_MS - \(Date\.now\(\) - \(solveFirstInputAt \|\| solveStartedAt\)\)/);
   assert.doesNotMatch(content, /SIGNED_IN_COMPLETION_FLOORS_MS|SIGNED_IN_ACTION_SETTLE_MS|settleSignedInAction/);
   const floors = content.match(/waitForSignedInCompletion\(\)/g) || [];
-  assert.ok(floors.length >= 9, `expected one floor per final action, found ${floors.length}`);
+  assert.ok(floors.length >= 8, `expected one floor per final action, found ${floors.length}`);
+  assert.doesNotMatch(content, /replaceInputText\(input, solutions\[0\]\);[\s\S]{0,120}waitForSignedInCompletion/);
   assert.match(content, /pendingClicks === 1[\s\S]*?await waitForSignedInCompletion\(\)/);
   assert.match(content, /pendingCells === 1[\s\S]*?await waitForSignedInCompletion\(\)/);
   assert.match(content, /index === path\.length - 1[\s\S]*?await waitForSignedInCompletion\(\)/);
@@ -80,6 +81,17 @@ test("signed-in solves hold only their final move to a two-second floor", () => 
   assert.match(content, /SIGNED_IN_SAVE_SETTLE_MS = 800[\s\S]*?waitUntil\(saveErrorVisible, SIGNED_IN_SAVE_SETTLE_MS/);
   assert.match(content, /solveFirstInputAt \|\| solveStartedAt/);
   assert.match(content, /issue saving your game/);
+});
+
+test("a parked cursor over the panel cannot leak input into the page", () => {
+  assert.match(styles, /\.lls__shield[\s\S]*?pointer-events:\s*auto/);
+  assert.match(styles, /\[data-solving="true"\] \.lls__shield[\s\S]*?display:\s*block/);
+  assert.match(styles, /\[data-dragging="true"\] \.lls__shield/);
+  assert.match(content, /lls__shield/);
+  assert.match(content, /event\.preventDefault\(\);\s*\n\s*event\.stopImmediatePropagation\(\);/);
+  assert.match(content, /"pointerdown", "pointermove", "pointerup"/);
+  assert.match(content, /function elementFullyInView\(element\)/);
+  assert.match(content, /if \(!elementFullyInView\(element\)\) element\.scrollIntoView/);
 });
 
 test("word-game capture persists for the whole visit and survives worker restarts", () => {

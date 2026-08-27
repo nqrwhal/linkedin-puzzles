@@ -133,6 +133,14 @@ test("pinpoint and crossclimb replay LinkedIn's own save call with a UI fallback
   assert.match(content, /if \(await submitGameSave\(\{ crossClimbGameState[\s\S]*?return;\s*\n\s*\}[\s\S]*?fillLetterRow/);
 });
 
+test("anonymous first-visit launch gates are clicked through", () => {
+  assert.match(content, /async function startGameIfNeeded\(\)/);
+  assert.match(content, /\^\(Start game\|Start puzzle\|Solve now\|Play\)\$\/i/);
+  assert.match(content, /gameControls\("button, \[role='button'\], a\[href\]"\)\.find\(isGateControl\)/);
+  assert.match(content, /aria-label"\) \|\| ""/);
+  assert.match(content, /await startGameIfNeeded\(\);/);
+});
+
 test("completed boards and slow pads do not derail solves", () => {
   assert.match(content, /gameControls\("input"\)\.filter\(\(input\) => input\.closest\("\[aria-label\^='Row'\]"\)\)/);
   assert.match(content, /let numberButton = null;[\s\S]*?await waitUntil\(\(\) => \{\s*numberButton =/);

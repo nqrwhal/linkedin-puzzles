@@ -401,6 +401,27 @@
     await insertText(text);
   }
 
+  async function startGameIfNeeded() {
+    // First visits and anonymous windows open on a launch screen ("Start
+    // game", "Solve now", …) that can render late, uses either a button or a
+    // link, and hides or previews the board; daily signed-in players never
+    // see it. Wait for the gate, click through with trusted input, and wait
+    // for it to leave.
+    const isGateControl = (element) => {
+      const label = `${element.textContent || ""} ${element.getAttribute("aria-label") || ""}`.trim();
+      return /^(Start game|Start puzzle|Solve now|Play)$/i.test(label);
+    };
+    let gateControl = null;
+    await waitUntil(() => {
+      gateControl = gameControls("button, [role='button'], a[href]").find(isGateControl);
+      return Boolean(gateControl);
+    }, 4000);
+    if (!gateControl) return;
+    setStatus("Starting the game…", "working");
+    await clickElement(gateControl);
+    await waitUntil(() => gameControls("button, [role='button'], a[href]").filter(isGateControl).every((element) => !element.isConnected), 6000);
+  }
+
   async function dismissTutorialDialog() {
     const dialog = [...document.querySelectorAll("[role='dialog'], [aria-modal='true']")].find((element) =>
       /how to play|tutorial/i.test(element.textContent || element.getAttribute("aria-label") || ""),
@@ -1360,6 +1381,7 @@
       setStatus("Reading the board…", "working");
       await nextFrame();
       await beginTrustedInput();
+      await startGameIfNeeded();
       await dismissTutorialDialog();
       await GAME_SOLVERS[game]();
       assertStillSolving();

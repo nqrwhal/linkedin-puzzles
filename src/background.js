@@ -373,7 +373,12 @@ async function handleMessage(message, sender) {
           func: capturePagePuzzleSource,
         });
         debug("sources scan done", tabId, (results || []).length);
-        for (const result of results || []) rememberPuzzleSource(tabId, result.result);
+        for (const result of results || []) {
+          if (result?.result && !/blueprintGamePuzzle|pinpointGamePuzzle|crossClimbGamePuzzle|wendGamePuzzle|solutionWords|puzzleLetters|rungs/.test(result.result)) {
+            debug("scan peek", tabId, String(result.result).slice(0, 220));
+          }
+          rememberPuzzleSource(tabId, result.result);
+        }
       } catch (error) {
         debug("sources scan failed", tabId, String(error?.message || error));
         // React's page-world props are an optional fallback; captured responses still work.

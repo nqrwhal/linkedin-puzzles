@@ -510,7 +510,7 @@ chrome.debugger.onEvent.addListener((source, method, params) => {
           csrf: params.request.headers?.["csrf-token"] || params.request.headers?.["Csrf-Token"] || null,
           resourceKey: body?.variables?.entity?.resourceKey || null,
         };
-        if (template.csrf && template.resourceKey && template.queryId) {
+        if (template.queryId && template.resourceKey) {
           gameTemplate = template;
           persistSessionState();
           debug("game save", tabId, template.queryId, String(params.request.postData).slice(0, 1800));

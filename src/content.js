@@ -466,6 +466,21 @@
     }
   }
 
+  function sessionCsrfToken(sources) {
+    // LinkedIn's csrf-token header is the session's JSESSIONID cookie value,
+    // which the page can read directly. Deriving it per page keeps a template
+    // learned in one window (e.g. normal) valid in another (e.g. incognito)
+    // and survives token rotation; the serialized bootstrap form is a
+    // fallback for pages where the cookie is not reachable.
+    const cookie = document.cookie.match(/JSESSIONID="?([^;"]+)/);
+    if (cookie) return cookie[1];
+    for (const source of sources) {
+      const match = source.match(/JSESSIONID"?\s*[:=]\s*"?(ajax:\d+)/i);
+      if (match) return match[1];
+    }
+    return null;
+  }
+
   function puzzleNumberFromPage() {
     const match = gameAreaText().match(/#(\d+)/);
     return match ? Number(match[1]) : null;
@@ -476,10 +491,12 @@
   // behavior is exactly what produced the captured template.
   async function submitGameSave(gameStateUnion) {
     const template = await requestGameTemplate();
-    if (!template?.queryId || !template?.csrf || !template?.resourceKey) return false;
+    if (!template?.queryId || !template?.resourceKey) return false;
     const puzzleNumber = puzzleNumberFromPage();
     const [, memberId = "", gameId = ""] = template.resourceKey.match(/\(([^,]+),(\d+),(\d+)\)/) || [];
     if (!memberId || !gameId || !puzzleNumber) return false;
+    const csrf = sessionCsrfToken(bootstrapSources()) || template.csrf;
+    if (!csrf) return false;
     const elapsedSeconds = Math.max(2, Math.round((Date.now() - (solveStartedAt || Date.now())) / 1000));
     const body = {
       variables: {
@@ -507,7 +524,7 @@
         headers: {
           "accept": "application/vnd.linkedin.normalized+json+2.1",
           "content-type": "application/json; charset=UTF-8",
-          "csrf-token": template.csrf,
+          "csrf-token": csrf,
           "x-li-pem-metadata": "Voyager - Games=game-state-update-post",
           "x-restli-protocol-version": "2.0.0",
         },

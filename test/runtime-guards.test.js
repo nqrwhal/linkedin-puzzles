@@ -125,6 +125,8 @@ test("pinpoint and crossclimb replay LinkedIn's own save call with a UI fallback
   assert.match(content, /crossClimbGameState: requestState/);
   assert.match(content, /split\(""\)\.join\("&-\*"\)/);
   assert.match(content, /gamePlayState: "END_SOLVED"/);
+  assert.match(content, /document\.cookie\.match\(\/JSESSIONID="\?\(\[\^;"\]\+\)\/\)/);
+  assert.match(content, /const csrf = sessionCsrfToken\(bootstrapSources\(\)\) \|\| template\.csrf;/);
   assert.match(content, /payload\.errors\?\.length \|\| payload\.data\?\.errors\?\.length/);
   assert.match(content, /Math\.max\(2, Math\.round\(\(Date\.now\(\) - \(solveStartedAt \|\| Date\.now\(\)\)\) \/ 1000\)\)/);
   assert.match(content, /if \(await submitGameSave\(\{ blueprintGameState[\s\S]*?return;\s*\n\s*\}[\s\S]*?replaceInputText\(input, solutions\[0\]\)/);

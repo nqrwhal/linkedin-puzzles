@@ -114,8 +114,9 @@ test("solves keep working in occluded and background tabs", () => {
 
 test("pinpoint and crossclimb replay LinkedIn's own save call with a UI fallback", () => {
   assert.match(background, /let gameTemplate = null/);
-  assert.match(background, /voyagerIdentityDashGames/);
-  assert.match(background, /queryId: \(url\.match\(/);
+  assert.match(background, /gameStoredRecord/);
+  assert.match(background, /queryId: url\.match\(\/\[\?&\]queryId=\(\[\^&\]\+\)\/\)\?\.\[1\] \|\| null/);
+  assert.match(background, /setTimeout\(\(\) => void detachIfIdle\(tabId\), 2000\)/);
   assert.match(background, /message\?\.type === "lls-game-template"/);
   assert.match(background, /template: gameTemplate \}/);
   assert.match(content, /async function submitGameSave\(gameStateUnion\)/);

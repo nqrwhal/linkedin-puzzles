@@ -396,13 +396,25 @@ async function handleMessage(message, sender) {
     await ensureAttached(tabId);
     inputTabs.add(tabId);
     armInputSafety(tabId);
+    // Watching requests during trusted input also lets logic-game saves
+    // teach the replay template, which word-game capture already covers.
+    try {
+      await chrome.debugger.sendCommand({ tabId }, "Network.enable", {
+        maxResourceBufferSize: 4 * 1024 * 1024,
+        maxTotalBufferSize: 8 * 1024 * 1024,
+      });
+    } catch {
+      // Input still works without request visibility.
+    }
     return { ok: true };
   }
 
   if (message?.type === "lls-input-stop") {
     inputTabs.delete(tabId);
     clearTimer(inputTimers, tabId);
-    await detachIfIdle(tabId);
+    // Games debounce their final save past the last input, so keep the
+    // debugger link (and request visibility) briefly after input ends.
+    setTimeout(() => void detachIfIdle(tabId), 2000);
     return { ok: true };
   }
 
@@ -482,6 +494,33 @@ chrome.debugger.onDetach.addListener((source) => {
 chrome.debugger.onEvent.addListener((source, method, params) => {
   const tabId = source.tabId;
   if (!Number.isInteger(tabId)) return;
+  // Template capture runs whenever any Network events reach us (word-game
+  // capture or trusted-input sessions on logic games alike).
+  if (method === "Network.requestWillBeSent") {
+    // Remember the shape of LinkedIn's own game-save GraphQL call so solves
+    // can replay it instead of driving the UI. Logic games may use a
+    // different mutation name, so match any GraphQL call carrying a game
+    // record rather than one hard-coded operation.
+    const url = params?.request?.url || "";
+    if (/\/voyager\/api\/graphql/.test(url) && params.request.postData?.includes("gameStoredRecord")) {
+      try {
+        const body = JSON.parse(params.request.postData);
+        const template = {
+          queryId: url.match(/[?&]queryId=([^&]+)/)?.[1] || null,
+          csrf: params.request.headers?.["csrf-token"] || params.request.headers?.["Csrf-Token"] || null,
+          resourceKey: body?.variables?.entity?.resourceKey || null,
+        };
+        if (template.csrf && template.resourceKey && template.queryId) {
+          gameTemplate = template;
+          persistSessionState();
+          debug("game save", tabId, template.queryId, String(params.request.postData).slice(0, 1800));
+        }
+      } catch {
+        // Non-JSON bodies are not game saves.
+      }
+    }
+  }
+
   if (!captureTabs.has(tabId)) {
     // A restarted service worker drops its capture bookkeeping while the
     // debugger link and Network domain survive it. Receiving these events
@@ -490,29 +529,6 @@ chrome.debugger.onEvent.addListener((source, method, params) => {
     if (method !== "Network.responseReceived") return;
     captureTabs.add(tabId);
     armCaptureStop(tabId);
-  }
-
-  if (method === "Network.requestWillBeSent") {
-    // Remember the shape of LinkedIn's own game-save GraphQL call so solves
-    // can replay it instead of driving the UI.
-    const url = params?.request?.url || "";
-    if (/voyagerIdentityDashGames\.[0-9a-f]+/.test(url) && params.request.postData) {
-      try {
-        const body = JSON.parse(params.request.postData);
-        const template = {
-          queryId: (url.match(/voyagerIdentityDashGames\.[0-9a-f]+/) || [""])[0],
-          csrf: params.request.headers?.["csrf-token"] || params.request.headers?.["Csrf-Token"] || null,
-          resourceKey: body?.variables?.entity?.resourceKey || null,
-        };
-        if (template.csrf && template.resourceKey) {
-          gameTemplate = template;
-          persistSessionState();
-          debug("game template", tabId, template.queryId, template.resourceKey);
-        }
-      } catch {
-        // Non-JSON bodies are not game saves.
-      }
-    }
   }
 
   if (method === "Network.responseReceived") {

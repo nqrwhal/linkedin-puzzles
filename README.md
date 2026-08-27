@@ -46,9 +46,11 @@ The extension reads the same accessibility labels and cell metadata that LinkedI
 - Zip: wall-aware ordered Hamiltonian-path search with connectivity pruning
 - Mini Sudoku: current-grid detection and region-aware Sudoku search
 - Patches: rectangle enumeration and exact cover
-- Pinpoint: accepted category extraction from the page's bootstrap data
-- Crossclimb: visible clue-to-row matching, ladder ordering, and final-pair entry
+- Pinpoint: accepted category extraction from the page's bootstrap data, submitted by replaying LinkedIn's own single save request when its shape is known
+- Crossclimb: visible clue-to-row matching, ladder ordering, and final-pair entry, with a single-request path when the save shape is known
 - Wend: exact answer paths from the page's delivered grid data
+
+When any LinkedIn game save flows through the tab's network capture, the extension remembers the call's query id, CSRF token, and member key, and Pinpoint and Crossclimb then solve with one request each instead of driving the UI. The first solve in a fresh browser session falls back to the verified UI path (which also teaches the request shape), and any rejected or malformed request falls straight back to the UI solver, so a solve never depends on the private endpoint alone.
 
 Word-game parsers preserve valid embedded JSON before peeling wrapper escaping, so quoted clue and answer text cannot corrupt otherwise complete puzzle data.
 

@@ -112,6 +112,24 @@ test("solves keep working in occluded and background tabs", () => {
   assert.doesNotMatch(content, /const nextFrame = \(\) => new Promise\(\(resolve\) => requestAnimationFrame/);
 });
 
+test("pinpoint and crossclimb replay LinkedIn's own save call with a UI fallback", () => {
+  assert.match(background, /let gameTemplate = null/);
+  assert.match(background, /voyagerIdentityDashGames/);
+  assert.match(background, /queryId: \(url\.match\(/);
+  assert.match(background, /message\?\.type === "lls-game-template"/);
+  assert.match(background, /template: gameTemplate \}/);
+  assert.match(content, /async function submitGameSave\(gameStateUnion\)/);
+  assert.match(content, /gameStoredRecord/);
+  assert.match(content, /blueprintGameState: \[solutions\[0\]\]/);
+  assert.match(content, /crossClimbGameState: requestState/);
+  assert.match(content, /split\(""\)\.join\("&-\*"\)/);
+  assert.match(content, /gamePlayState: "END_SOLVED"/);
+  assert.match(content, /payload\.errors\?\.length \|\| payload\.data\?\.errors\?\.length/);
+  assert.match(content, /Math\.max\(2, Math\.round\(\(Date\.now\(\) - \(solveStartedAt \|\| Date\.now\(\)\)\) \/ 1000\)\)/);
+  assert.match(content, /if \(await submitGameSave\(\{ blueprintGameState[\s\S]*?return;\s*\n\s*\}[\s\S]*?replaceInputText\(input, solutions\[0\]\)/);
+  assert.match(content, /if \(await submitGameSave\(\{ crossClimbGameState[\s\S]*?return;\s*\n\s*\}[\s\S]*?fillLetterRow/);
+});
+
 test("completed boards and slow pads do not derail solves", () => {
   assert.match(content, /gameControls\("input"\)\.filter\(\(input\) => input\.closest\("\[aria-label\^='Row'\]"\)\)/);
   assert.match(content, /let numberButton = null;[\s\S]*?await waitUntil\(\(\) => \{\s*numberButton =/);

@@ -456,9 +456,89 @@
     throw lastError;
   }
 
+  async function requestGameTemplate() {
+    try {
+      const response = await chrome.runtime.sendMessage({ type: "lls-game-template" });
+      if (!response?.ok || !response.template) return null;
+      return response.template;
+    } catch {
+      return null;
+    }
+  }
+
+  function puzzleNumberFromPage() {
+    const match = gameAreaText().match(/#(\d+)/);
+    return match ? Number(match[1]) : null;
+  }
+
+  // Replays LinkedIn's own game-save GraphQL call with the solved state. Any
+  // failure returns false so the caller falls back to the UI solver, whose
+  // behavior is exactly what produced the captured template.
+  async function submitGameSave(gameStateUnion) {
+    const template = await requestGameTemplate();
+    if (!template?.queryId || !template?.csrf || !template?.resourceKey) return false;
+    const puzzleNumber = puzzleNumberFromPage();
+    const [, memberId = "", gameId = ""] = template.resourceKey.match(/\(([^,]+),(\d+),(\d+)\)/) || [];
+    if (!memberId || !gameId || !puzzleNumber) return false;
+    const elapsedSeconds = Math.max(2, Math.round((Date.now() - (solveStartedAt || Date.now())) / 1000));
+    const body = {
+      variables: {
+        entity: {
+          entity: {
+            gameStoredRecord: {
+              gamePlayState: "END_SOLVED",
+              timeElapsed: elapsedSeconds,
+              isFlawless: true,
+              completionAttributes: { isHintFree: true, isMistakeFree: true },
+              gameStateUnion,
+            },
+          },
+          resourceKey: `urn:li:fsd_game:(${memberId},${gameId},${puzzleNumber})`,
+        },
+      },
+      queryId: template.queryId,
+      includeWebMetadata: true,
+    };
+    try {
+      markTrustedInput();
+      const response = await fetch(`https://www.linkedin.com/voyager/api/graphql?action=execute&queryId=${template.queryId}`, {
+        method: "POST",
+        credentials: "include",
+        headers: {
+          "accept": "application/vnd.linkedin.normalized+json+2.1",
+          "content-type": "application/json; charset=UTF-8",
+          "csrf-token": template.csrf,
+          "x-li-pem-metadata": "Voyager - Games=game-state-update-post",
+          "x-restli-protocol-version": "2.0.0",
+        },
+        body: JSON.stringify(body),
+      });
+      if (!response.ok) {
+        chrome.runtime.sendMessage({ type: "lls-debug", text: `request solve rejected: HTTP ${response.status}` }).catch(() => {});
+        return false;
+      }
+      // LinkedIn reports rejected mutations inside a 200 envelope.
+      const payload = await response.json().catch(() => null);
+      if (!payload || payload.errors?.length || payload.data?.errors?.length) {
+        chrome.runtime.sendMessage({ type: "lls-debug", text: `request solve rejected: ${(payload?.errors || payload?.data?.errors || [])[0]?.message || "unknown error"}` }).catch(() => {});
+        return false;
+      }
+      return true;
+    } catch (error) {
+      chrome.runtime.sendMessage({ type: "lls-debug", text: `request solve failed: ${error?.message || error}` }).catch(() => {});
+      return false;
+    }
+  }
+
   async function solvePinpointGame() {
     const solutions = await parsePuzzleData(solvers.parsePinpointSolutions);
     if (/\/games\/pinpoint\/results\/?$/.test(location.pathname)) return;
+    setStatus("Submitting the category…", "working");
+    if (await submitGameSave({ blueprintGameState: [solutions[0]] })) {
+      solveSuccessMessage = "Solved with a single request.";
+      setStatus(solveSuccessMessage, "success");
+      return;
+    }
     let input = null;
     await waitUntil(() => {
       input = document.querySelector("input[placeholder='Guess the category...'], input[aria-label='Guess the category...']");
@@ -568,7 +648,19 @@
   async function solveCrossclimbGame() {
     if (/\/games\/crossclimb\/results\/?$/.test(location.pathname)) return;
     const rungs = await parsePuzzleData(solvers.parseCrossclimbRungs);
+    setStatus("Answering the clues…", "working");
     const ordered = rungs.slice().sort((a, b) => a.solutionRungIndex - b.solutionRungIndex);
+    const requestState = ordered.map((rung) => ({
+      solutionRungIndex: rung.solutionRungIndex,
+      clue: rung.clue,
+      word: rung.word.toLowerCase(),
+      guess: rung.word.toUpperCase().split("").join("&-*"),
+    }));
+    if (await submitGameSave({ crossClimbGameState: requestState })) {
+      solveSuccessMessage = "Solved with a single request.";
+      setStatus(solveSuccessMessage, "success");
+      return;
+    }
     const middleRungs = rungs.filter((rung) => rung.solutionRungIndex > 0 && rung.solutionRungIndex < ordered.length - 1);
 
     // Only the game's own letter rows count here; LinkedIn's global search

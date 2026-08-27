@@ -17,6 +17,11 @@ const puzzleSources = new Map();
 const CAPTURE_LEASE_MS = 15 * 60 * 1000;
 const MAX_PERSISTED_SOURCE_CHARS = 6 * 1024 * 1024;
 
+// The last observed games GraphQL save: { queryId, csrf, resourceKey }. Its
+// query id, CSRF token, and member URN are session-wide, so one observed save
+// lets any tab replay completions instead of driving the UI.
+let gameTemplate = null;
+
 function debug(...args) {
   console.log("[lls-bg]", ...args);
 }
@@ -34,6 +39,7 @@ function loadSessionState() {
       for (const [tabId, route] of Object.entries(state?.llsPuzzleState?.routes || {})) {
         if (!puzzleRoutes.has(Number(tabId))) puzzleRoutes.set(Number(tabId), route);
       }
+      if (!gameTemplate && state?.llsPuzzleState?.template) gameTemplate = state.llsPuzzleState.template;
     }).catch(() => {
       // In-memory capture still covers pages solved in this service worker run.
     });
@@ -57,7 +63,7 @@ function persistSessionState() {
   }
   const routes = {};
   for (const [tabId, route] of puzzleRoutes) routes[tabId] = route;
-  chrome.storage.session.set({ llsPuzzleState: { sources, routes } }).catch(() => {
+  chrome.storage.session.set({ llsPuzzleState: { sources, routes, template: gameTemplate } }).catch(() => {
     // Exceeding the session quota only costs restart durability.
   });
 }
@@ -333,6 +339,11 @@ async function handleMessage(message, sender) {
     return { ok: true };
   }
 
+  if (message?.type === "lls-game-template") {
+    debug("template request", tabId, gameTemplate ? "hit" : "miss");
+    return { ok: true, template: gameTemplate };
+  }
+
   if (message?.type === "lls-capture-start") {
     await startCapture(tabId, sender.url);
     return { ok: true };
@@ -479,6 +490,29 @@ chrome.debugger.onEvent.addListener((source, method, params) => {
     if (method !== "Network.responseReceived") return;
     captureTabs.add(tabId);
     armCaptureStop(tabId);
+  }
+
+  if (method === "Network.requestWillBeSent") {
+    // Remember the shape of LinkedIn's own game-save GraphQL call so solves
+    // can replay it instead of driving the UI.
+    const url = params?.request?.url || "";
+    if (/voyagerIdentityDashGames\.[0-9a-f]+/.test(url) && params.request.postData) {
+      try {
+        const body = JSON.parse(params.request.postData);
+        const template = {
+          queryId: (url.match(/voyagerIdentityDashGames\.[0-9a-f]+/) || [""])[0],
+          csrf: params.request.headers?.["csrf-token"] || params.request.headers?.["Csrf-Token"] || null,
+          resourceKey: body?.variables?.entity?.resourceKey || null,
+        };
+        if (template.csrf && template.resourceKey) {
+          gameTemplate = template;
+          persistSessionState();
+          debug("game template", tabId, template.queryId, template.resourceKey);
+        }
+      } catch {
+        // Non-JSON bodies are not game saves.
+      }
+    }
   }
 
   if (method === "Network.responseReceived") {

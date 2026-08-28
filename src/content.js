@@ -271,7 +271,9 @@
     title.textContent = GAME_NAMES[currentGame];
     solveButton.textContent = "Solve puzzle";
     solveButton.disabled = solving;
-    if (!solving) setStatus("Board recognized. Ready to solve.");
+    // Leave a just-earned success message alone; later page mutations would
+    // otherwise overwrite it with the idle line.
+    if (!solving && status.dataset.state !== "success") setStatus("Board recognized. Ready to solve.");
   }
 
   function requestPuzzleCapture(force = false) {
@@ -502,20 +504,14 @@
     return null;
   }
 
-  function puzzleNumberFromPage() {
-    const match = gameAreaText().match(/#(\d+)/);
-    return match ? Number(match[1]) : null;
-  }
-
   // Replays LinkedIn's own game-save GraphQL call with the solved state. Any
   // failure returns false so the caller falls back to the UI solver, whose
   // behavior is exactly what produced the captured template.
   async function submitGameSave(gameStateUnion) {
     const template = await requestGameTemplate();
-    if (!template?.queryId || !template?.resourceKey) return false;
-    const puzzleNumber = puzzleNumberFromPage();
-    const [, memberId = "", gameId = ""] = template.resourceKey.match(/\(([^,]+),(\d+),(\d+)\)/) || [];
-    if (!memberId || !gameId || !puzzleNumber) return false;
+    const stateKey = Object.keys(gameStateUnion)[0];
+    const resourceKey = template?.saves?.[stateKey];
+    if (!template?.queryId || !resourceKey) return false;
     const csrf = sessionCsrfToken(bootstrapSources()) || template.csrf;
     if (!csrf) return false;
     const elapsedSeconds = Math.max(2, Math.round((Date.now() - (solveStartedAt || Date.now())) / 1000));
@@ -531,7 +527,7 @@
               gameStateUnion,
             },
           },
-          resourceKey: `urn:li:fsd_game:(${memberId},${gameId},${puzzleNumber})`,
+          resourceKey,
         },
       },
       queryId: template.queryId,
@@ -569,8 +565,14 @@
   }
 
   async function solvePinpointGame() {
+    // Solved-board revisits often ship no puzzle data at all; report the
+    // completed state instead of a parse failure.
+    if (/\/games\/pinpoint\/(?:results|view)/.test(location.pathname)
+      || gameAreaText().includes("See results")
+      || acceptedSolutionVisible()) {
+      return;
+    }
     const solutions = await parsePuzzleData(solvers.parsePinpointSolutions);
-    if (/\/games\/pinpoint\/results\/?$/.test(location.pathname)) return;
     setStatus("Submitting the category…", "working");
     if (await submitGameSave({ blueprintGameState: [solutions[0]] })) {
       solveSuccessMessage = "Solved with a single request.";
@@ -684,7 +686,7 @@
   }
 
   async function solveCrossclimbGame() {
-    if (/\/games\/crossclimb\/results\/?$/.test(location.pathname)) return;
+    if (/\/games\/crossclimb\/results\/?$/.test(location.pathname) || acceptedSolutionVisible()) return;
     const rungs = await parsePuzzleData(solvers.parseCrossclimbRungs);
     setStatus("Answering the clues…", "working");
     const ordered = rungs.slice().sort((a, b) => a.solutionRungIndex - b.solutionRungIndex);

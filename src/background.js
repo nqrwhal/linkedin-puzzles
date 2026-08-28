@@ -17,9 +17,10 @@ const puzzleSources = new Map();
 const CAPTURE_LEASE_MS = 15 * 60 * 1000;
 const MAX_PERSISTED_SOURCE_CHARS = 6 * 1024 * 1024;
 
-// The last observed games GraphQL save: { queryId, csrf, resourceKey }. Its
-// query id, CSRF token, and member URN are session-wide, so one observed save
-// lets any tab replay completions instead of driving the UI.
+// The last observed games GraphQL saves: { queryId, csrf, saves } where saves
+// maps each game's state key (e.g. crossClimbGameState) to the exact
+// resourceKey LinkedIn saved with, so replays never have to re-derive the
+// member, game id, or puzzle day from page text.
 let gameTemplate = null;
 
 function debug(...args) {
@@ -39,8 +40,7 @@ function loadSessionState() {
       for (const [tabId, route] of Object.entries(state?.llsPuzzleState?.routes || {})) {
         if (!puzzleRoutes.has(Number(tabId))) puzzleRoutes.set(Number(tabId), route);
       }
-      if (!gameTemplate && state?.llsPuzzleState?.template) gameTemplate = state.llsPuzzleState.template;
-    }).catch(() => {
+      if (!gameTemplate && state?.llsPuzzleState?.template) gameTemplate = state.llsPuzzleState.template;    }).catch(() => {
       // In-memory capture still covers pages solved in this service worker run.
     });
   }
@@ -510,15 +510,20 @@ chrome.debugger.onEvent.addListener((source, method, params) => {
     if (/\/voyager\/api\/graphql/.test(url) && params.request.postData?.includes("gameStoredRecord")) {
       try {
         const body = JSON.parse(params.request.postData);
-        const template = {
-          queryId: url.match(/[?&]queryId=([^&]+)/)?.[1] || null,
-          csrf: params.request.headers?.["csrf-token"] || params.request.headers?.["Csrf-Token"] || null,
-          resourceKey: body?.variables?.entity?.resourceKey || null,
-        };
-        if (template.queryId && template.resourceKey) {
-          gameTemplate = template;
-          persistSessionState();
-          debug("game save", tabId, template.queryId, String(params.request.postData).slice(0, 1800));
+        const record = body?.variables?.entity?.entity?.gameStoredRecord;
+        const stateUnion = record?.gameStateUnion || {};
+        const stateKey = Object.keys(stateUnion)[0];
+        const resourceKey = body?.variables?.entity?.resourceKey;
+        if (stateKey && resourceKey) {
+          gameTemplate = {
+            queryId: url.match(/[?&]queryId=([^&]+)/)?.[1] || null,
+            csrf: params.request.headers?.["csrf-token"] || params.request.headers?.["Csrf-Token"] || gameTemplate?.csrf,
+            saves: { ...gameTemplate?.saves, [stateKey]: resourceKey },
+          };
+          if (gameTemplate.queryId) {
+            persistSessionState();
+            debug("game save", tabId, stateKey, resourceKey);
+          }
         }
       } catch {
         // Non-JSON bodies are not game saves.

@@ -1,0 +1,32 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  test-and-package:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+
+      - name: Run tests
+        run: npm test
+
+      - name: Build extension zip
+        run: |
+          VERSION=$(node -p "require('./manifest.json').version")
+          mkdir -p dist
+          zip -r "dist/linkedin-puzzle-solver-$VERSION.zip" manifest.json src -x "*/.DS_Store"
+          unzip -l "dist/linkedin-puzzle-solver-$VERSION.zip"
+
+      - name: Upload zip artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: linkedin-puzzle-solver
+          path: dist/*.zip

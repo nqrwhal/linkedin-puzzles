@@ -69,3 +69,14 @@ npm test
 ```
 
 After editing a loaded unpacked extension, click its reload icon on `chrome://extensions`, then reload the puzzle page.
+
+### Releasing
+
+CI builds the extension zip on every push, and publishing a release is tag-driven: bump the version in `manifest.json` and `package.json`, commit, then
+
+```bash
+git tag vX.Y.Z
+git push origin main --tags
+```
+
+The Release workflow runs the tests, refuses a tag that does not match `manifest.json`'s version, builds `linkedin-puzzle-solver-X.Y.Z.zip`, and publishes the GitHub release with it.

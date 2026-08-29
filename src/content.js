@@ -504,13 +504,17 @@
     return null;
   }
 
-  // Game ids observed for LinkedIn's word games; a captured save overrides
-  // or extends these.
-  const KNOWN_GAME_IDS = { blueprintGameState: "1", crossClimbGameState: "2" };
+  // LinkedIn numbers each game's puzzles in its own per-game series that the
+  // page never displays, so the replay day is extrapolated from the day
+  // captured with the save, counted in Pacific calendar days.
+  function pacificDate(date = new Date()) {
+    return new Intl.DateTimeFormat("en-CA", { timeZone: "America/Los_Angeles" }).format(date);
+  }
 
-  function puzzleDayFromPage() {
-    const text = gameAreaText();
-    return text.match(/#(\d+)\b/)?.[1] || text.match(/\bNO\.(\d+)/i)?.[1] || null;
+  function pacificDaysBetween(fromDay, toDay) {
+    const from = Date.parse(`${fromDay}T00:00:00Z`);
+    const to = Date.parse(`${toDay}T00:00:00Z`);
+    return Number.isFinite(from) && Number.isFinite(to) ? Math.round((to - from) / 86400000) : NaN;
   }
 
   // Replays LinkedIn's own game-save GraphQL call with the solved state. Any
@@ -519,10 +523,11 @@
   async function submitGameSave(gameStateUnion) {
     const template = await requestGameTemplate();
     const stateKey = Object.keys(gameStateUnion)[0];
-    const gameId = template?.saves?.[stateKey] || KNOWN_GAME_IDS[stateKey];
-    if (!template?.queryId || !template?.member || !gameId) return false;
-    const puzzleDay = puzzleDayFromPage();
-    if (!puzzleDay) return false;
+    const entry = template?.saves?.[stateKey];
+    if (!template?.queryId || !template?.member || !entry) return false;
+    const elapsedDays = pacificDaysBetween(entry.on, pacificDate());
+    if (!Number.isInteger(elapsedDays) || elapsedDays < 0) return false;
+    const puzzleDay = entry.day + elapsedDays;
     const csrf = sessionCsrfToken(bootstrapSources()) || template.csrf;
     if (!csrf) return false;
     const elapsedSeconds = Math.max(2, Math.round((Date.now() - (solveStartedAt || Date.now())) / 1000));
@@ -538,7 +543,7 @@
               gameStateUnion,
             },
           },
-          resourceKey: `urn:li:fsd_game:(${template.member},${gameId},${puzzleDay})`,
+          resourceKey: `urn:li:fsd_game:(${template.member},${entry.gameId},${puzzleDay})`,
         },
       },
       queryId: template.queryId,

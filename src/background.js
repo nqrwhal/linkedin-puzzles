@@ -36,7 +36,19 @@ async function loadGameTemplate() {
   return gameTemplate;
 }
 
+// TEMPORARY (full-session capture): records every LinkedIn request seen on
+// the debugger session so the complete save protocol can be analyzed offline.
+const sessionCapture = new Map();
+
+function recordSessionRequest(tabId, entry) {
+  const log = sessionCapture.get(tabId) || [];
+  log.push(entry);
+  if (log.length > 800) log.shift();
+  sessionCapture.set(tabId, log);
+}
+
 function persistGameTemplate() {
+  debug("template write", JSON.stringify(gameTemplate));
   chrome.storage.local.set({ [TEMPLATE_STORAGE_KEY]: gameTemplate }).catch(() => {
     // Losing restart durability only costs one UI-taught solve.
   });
@@ -44,6 +56,10 @@ function persistGameTemplate() {
 
 function debug(...args) {
   console.log("[lls-bg]", ...args);
+}
+
+function pacificDate(date = new Date()) {
+  return new Intl.DateTimeFormat("en-CA", { timeZone: "America/Los_Angeles" }).format(date);
 }
 
 let sessionStateLoaded = null;
@@ -364,6 +380,10 @@ async function handleMessage(message, sender) {
     return { ok: true, template };
   }
 
+  if (message?.type === "lls-debug-requests") {
+    return { ok: true, requests: sessionCapture.get(tabId) || [] };
+  }
+
   if (message?.type === "lls-capture-start") {
     await startCapture(tabId, sender.url);
     return { ok: true };
@@ -437,9 +457,9 @@ async function handleMessage(message, sender) {
   if (message?.type === "lls-input-stop") {
     inputTabs.delete(tabId);
     clearTimer(inputTimers, tabId);
-    // Games debounce their final save past the last input, so keep the
-    // debugger link (and request visibility) briefly after input ends.
-    setTimeout(() => void detachIfIdle(tabId), 2000);
+    // Games debounce their final save well past the last input, so keep the
+    // debugger link (and request visibility) attached long enough to see it.
+    setTimeout(() => void detachIfIdle(tabId), 30000);
     return { ok: true };
   }
 
@@ -519,6 +539,17 @@ chrome.debugger.onDetach.addListener((source) => {
 chrome.debugger.onEvent.addListener(async (source, method, params) => {
   const tabId = source.tabId;
   if (!Number.isInteger(tabId)) return;
+  // TEMPORARY: full-session request recording.
+  if (method === "Network.requestWillBeSent") {
+    const req = params?.request || {};
+    if (/linkedin\.com/.test(req.url || "") && !/\.(js|css|png|svg|gif|ico|woff2?)/i.test(req.url)) {
+      recordSessionRequest(tabId, {
+        method: req.method,
+        url: String(req.url).slice(0, 400),
+        postData: req.postData ? String(req.postData).slice(0, 4000) : null,
+      });
+    }
+  }
   // Template capture runs whenever any Network events reach us (word-game
   // capture or trusted-input sessions on logic games alike).
   if (method === "Network.requestWillBeSent") {
@@ -539,11 +570,14 @@ chrome.debugger.onEvent.addListener(async (source, method, params) => {
           gameTemplate = {
             queryId: url.match(/[?&]queryId=([^&]+)/)?.[1] || known.queryId,
             member: resourceParts[1],
-            saves: { ...known.saves, [stateKey]: resourceParts[2] },
+            saves: {
+              ...known.saves,
+              [stateKey]: { gameId: resourceParts[2], day: Number(resourceParts[3]), on: pacificDate() },
+            },
           };
           if (gameTemplate.queryId) {
             persistGameTemplate();
-            debug("game save", tabId, stateKey, "gameId", resourceParts[2]);
+            debug("game save", tabId, stateKey, "gameId", resourceParts[2], "day", resourceParts[3]);
           }
         }
       } catch {

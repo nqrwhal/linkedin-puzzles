@@ -17,27 +17,13 @@ const puzzleSources = new Map();
 const CAPTURE_LEASE_MS = 15 * 60 * 1000;
 const MAX_PERSISTED_SOURCE_CHARS = 6 * 1024 * 1024;
 
-// The last observed games GraphQL saves: { queryId, member, saves } where
-// saves maps each game's state key (e.g. crossClimbGameState) to its game id.
-// Member ids and game ids are stable product constants, so the template lives
-// in storage.local and stays valid across browser restarts and days; the
-// puzzle day itself comes from the current page at replay time.
-const TEMPLATE_STORAGE_KEY = "llsGameTemplate";
-let gameTemplate = null;
+// The games save mutation's query id rotates with LinkedIn's build; any
+// observed save overrides this shipped default in memory for the session.
+const DEFAULT_GAME_QUERY_ID = "voyagerIdentityDashGames.f8508525e36bee5f9a5ab6b637854d87";
+let observedGameQueryId = null;
 
-async function loadGameTemplate() {
-  if (gameTemplate) return gameTemplate;
-  try {
-    const stored = await chrome.storage.local.get(TEMPLATE_STORAGE_KEY);
-    gameTemplate = stored[TEMPLATE_STORAGE_KEY] || null;
-  } catch {
-    gameTemplate = null;
-  }
-  return gameTemplate;
-}
-
-// TEMPORARY (full-session capture): records every LinkedIn request seen on
-// the debugger session so the complete save protocol can be analyzed offline.
+// Full-session request recording: every LinkedIn request seen on the
+// debugger session, dumped on demand for offline protocol analysis.
 const sessionCapture = new Map();
 
 function recordSessionRequest(tabId, entry) {
@@ -47,19 +33,8 @@ function recordSessionRequest(tabId, entry) {
   sessionCapture.set(tabId, log);
 }
 
-function persistGameTemplate() {
-  debug("template write", JSON.stringify(gameTemplate));
-  chrome.storage.local.set({ [TEMPLATE_STORAGE_KEY]: gameTemplate }).catch(() => {
-    // Losing restart durability only costs one UI-taught solve.
-  });
-}
-
 function debug(...args) {
   console.log("[lls-bg]", ...args);
-}
-
-function pacificDate(date = new Date()) {
-  return new Intl.DateTimeFormat("en-CA", { timeZone: "America/Los_Angeles" }).format(date);
 }
 
 let sessionStateLoaded = null;
@@ -374,10 +349,8 @@ async function handleMessage(message, sender) {
     return { ok: true };
   }
 
-  if (message?.type === "lls-game-template") {
-    const template = await loadGameTemplate();
-    debug("template request", tabId, template ? "hit" : "miss");
-    return { ok: true, template };
+  if (message?.type === "lls-game-query-id") {
+    return { ok: true, queryId: observedGameQueryId || DEFAULT_GAME_QUERY_ID };
   }
 
   if (message?.type === "lls-debug-requests") {
@@ -539,7 +512,8 @@ chrome.debugger.onDetach.addListener((source) => {
 chrome.debugger.onEvent.addListener(async (source, method, params) => {
   const tabId = source.tabId;
   if (!Number.isInteger(tabId)) return;
-  // TEMPORARY: full-session request recording.
+  // Full-session request recording plus query-id observation run on any
+  // Network events (word-game capture or trusted-input sessions alike).
   if (method === "Network.requestWillBeSent") {
     const req = params?.request || {};
     if (/linkedin\.com/.test(req.url || "") && !/\.(js|css|png|svg|gif|ico|woff2?)/i.test(req.url)) {
@@ -549,39 +523,13 @@ chrome.debugger.onEvent.addListener(async (source, method, params) => {
         postData: req.postData ? String(req.postData).slice(0, 4000) : null,
       });
     }
-  }
-  // Template capture runs whenever any Network events reach us (word-game
-  // capture or trusted-input sessions on logic games alike).
-  if (method === "Network.requestWillBeSent") {
-    // Remember the shape of LinkedIn's own game-save GraphQL call so solves
-    // can replay it instead of driving the UI. Logic games may use a
-    // different mutation name, so match any GraphQL call carrying a game
-    // record rather than one hard-coded operation.
-    const url = params?.request?.url || "";
-    if (/\/voyager\/api\/graphql/.test(url) && params.request.postData?.includes("gameStoredRecord")) {
-      try {
-        const body = JSON.parse(params.request.postData);
-        const record = body?.variables?.entity?.entity?.gameStoredRecord;
-        const stateUnion = record?.gameStateUnion || {};
-        const stateKey = Object.keys(stateUnion)[0];
-        const resourceParts = String(body?.variables?.entity?.resourceKey || "").match(/\(([^,]+),(\d+),(\d+)\)/);
-        if (stateKey && resourceParts) {
-          const known = (await loadGameTemplate()) || {};
-          gameTemplate = {
-            queryId: url.match(/[?&]queryId=([^&]+)/)?.[1] || known.queryId,
-            member: resourceParts[1],
-            saves: {
-              ...known.saves,
-              [stateKey]: { gameId: resourceParts[2], day: Number(resourceParts[3]), on: pacificDate() },
-            },
-          };
-          if (gameTemplate.queryId) {
-            persistGameTemplate();
-            debug("game save", tabId, stateKey, "gameId", resourceParts[2], "day", resourceParts[3]);
-          }
-        }
-      } catch {
-        // Non-JSON bodies are not game saves.
+    // The save mutation's query id is the only learned fact replays need;
+    // everything else comes statelessly from the page's own embedded data.
+    if (/\/voyager\/api\/graphql/.test(req.url || "") && req.postData?.includes("gameStoredRecord")) {
+      const observed = req.url.match(/[?&]queryId=([^&]+)/)?.[1];
+      if (observed && observed !== observedGameQueryId) {
+        observedGameQueryId = observed;
+        debug("game query id", observed);
       }
     }
   }

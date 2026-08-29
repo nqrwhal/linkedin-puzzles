@@ -479,14 +479,32 @@
     throw lastError;
   }
 
-  async function requestGameTemplate() {
-    try {
-      const response = await chrome.runtime.sendMessage({ type: "lls-game-template" });
-      if (!response?.ok || !response.template) return null;
-      return response.template;
-    } catch {
-      return null;
+  // LinkedIn numbers each game's puzzles in its own per-game series, but the
+  // page's own embedded data declares the exact game URN — member, game id,
+  // and current day — for whichever board it is serving, so replays need no
+  // learned state at all. Pages embed URNs for several games at once, so the
+  // current game's id selects the right one.
+  const GAME_IDS = { pinpoint: "1", crossclimb: "2", "mini-sudoku": "7" };
+
+  function gameUrnFromSources(sources, gameId) {
+    let fallback = null;
+    for (const source of sources) {
+      for (const match of source.matchAll(/urn:li:fsd_game:\([^)]+,\d+,\d+\)/g)) {
+        if (!fallback) fallback = match[0];
+        if (gameId && match[0].includes(`,${gameId},`)) return match[0];
+      }
     }
+    return null;
+  }
+
+  async function requestGameQueryId() {
+    try {
+      const response = await chrome.runtime.sendMessage({ type: "lls-game-query-id" });
+      if (response?.ok && response.queryId) return response.queryId;
+    } catch {
+      // The shipped default still applies.
+    }
+    return null;
   }
 
   function sessionCsrfToken(sources) {
@@ -504,32 +522,19 @@
     return null;
   }
 
-  // LinkedIn numbers each game's puzzles in its own per-game series that the
-  // page never displays, so the replay day is extrapolated from the day
-  // captured with the save, counted in Pacific calendar days.
-  function pacificDate(date = new Date()) {
-    return new Intl.DateTimeFormat("en-CA", { timeZone: "America/Los_Angeles" }).format(date);
-  }
-
-  function pacificDaysBetween(fromDay, toDay) {
-    const from = Date.parse(`${fromDay}T00:00:00Z`);
-    const to = Date.parse(`${toDay}T00:00:00Z`);
-    return Number.isFinite(from) && Number.isFinite(to) ? Math.round((to - from) / 86400000) : NaN;
-  }
-
-  // Replays LinkedIn's own game-save GraphQL call with the solved state. Any
-  // failure returns false so the caller falls back to the UI solver, whose
-  // behavior is exactly what produced the captured template.
+  // Replays LinkedIn's own game-save GraphQL call with the solved state.
+  // Everything the call needs — the game URN, answers, and CSRF — comes from
+  // the page being solved, so no state is learned or stored. Any failure
+  // returns false so the caller falls back to the UI solver.
   async function submitGameSave(gameStateUnion) {
-    const template = await requestGameTemplate();
-    const stateKey = Object.keys(gameStateUnion)[0];
-    const entry = template?.saves?.[stateKey];
-    if (!template?.queryId || !template?.member || !entry) return false;
-    const elapsedDays = pacificDaysBetween(entry.on, pacificDate());
-    if (!Number.isInteger(elapsedDays) || elapsedDays < 0) return false;
-    const puzzleDay = entry.day + elapsedDays;
-    const csrf = sessionCsrfToken(bootstrapSources()) || template.csrf;
-    if (!csrf) return false;
+    const sources = bootstrapSources();
+    // A wrong-game URN would corrupt another game's record, so only replay
+    // when the current game's id is known and its URN is present.
+    const gameUrn = gameUrnFromSources(sources, GAME_IDS[currentGame]);
+    if (!gameUrn) return false;
+    const csrf = sessionCsrfToken(sources);
+    const queryId = await requestGameQueryId();
+    if (!gameUrn || !csrf || !queryId) return false;
     const elapsedSeconds = Math.max(2, Math.round((Date.now() - (solveStartedAt || Date.now())) / 1000));
     const body = {
       variables: {
@@ -543,15 +548,15 @@
               gameStateUnion,
             },
           },
-          resourceKey: `urn:li:fsd_game:(${template.member},${entry.gameId},${puzzleDay})`,
+          resourceKey: gameUrn,
         },
       },
-      queryId: template.queryId,
+      queryId,
       includeWebMetadata: true,
     };
     try {
       markTrustedInput();
-      const response = await fetch(`https://www.linkedin.com/voyager/api/graphql?action=execute&queryId=${template.queryId}`, {
+      const response = await fetch(`https://www.linkedin.com/voyager/api/graphql?action=execute&queryId=${queryId}`, {
         method: "POST",
         credentials: "include",
         headers: {

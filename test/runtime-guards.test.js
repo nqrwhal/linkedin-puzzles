@@ -112,25 +112,25 @@ test("solves keep working in occluded and background tabs", () => {
   assert.doesNotMatch(content, /const nextFrame = \(\) => new Promise\(\(resolve\) => requestAnimationFrame/);
 });
 
-test("pinpoint and crossclimb replay LinkedIn's own save call with a UI fallback", () => {
-  assert.match(background, /let gameTemplate = null/);
-  assert.match(background, /gameStoredRecord/);
-  assert.match(background, /queryId: url\.match\(\/\[\?&\]queryId=\(\[\^&\]\+\)\/\)\?\.\[1\] \|\| known\.queryId/);
-  assert.match(background, /setTimeout\(\(\) => void detachIfIdle\(tabId\), 30000\)/);
-  assert.match(background, /message\?\.type === "lls-game-template"/);
-  assert.match(background, /await loadGameTemplate\(\)/);
-  assert.match(background, /TEMPLATE_STORAGE_KEY = "llsGameTemplate"/);
-  assert.match(background, /saves: \{\s*\.\.\.known\.saves,\s*\[stateKey\]: \{ gameId: resourceParts\[2\], day: Number\(resourceParts\[3\]\), on: pacificDate\(\) \},?\s*\}/);
-  assert.match(content, /function pacificDaysBetween\(fromDay, toDay\)/);
-  assert.match(content, /const puzzleDay = entry\.day \+ elapsedDays;/);
-  assert.match(content, /async function submitGameSave\(gameStateUnion\)/);
-  assert.match(content, /gameStoredRecord/);
-  assert.match(content, /blueprintGameState: \[solutions\[0\]\]/);
-  assert.match(content, /crossClimbGameState: requestState/);
-  assert.match(content, /split\(""\)\.join\("&-\*"\)/);
+test("single-request solves are stateless replays of the page's own save call", () => {
+  assert.match(background, /DEFAULT_GAME_QUERY_ID = "voyagerIdentityDashGames\.[0-9a-f]+"/);
+  assert.match(background, /observedGameQueryId/);
+  assert.match(background, /message\?\.type === "lls-game-query-id"/);
+  assert.match(background, /return \{ ok: true, queryId: observedGameQueryId \|\| DEFAULT_GAME_QUERY_ID \};/);
+  assert.doesNotMatch(background, /gameTemplate|TEMPLATE_STORAGE_KEY|pacificDate|storage\.local/);
+  assert.match(content, /function gameUrnFromSources\(sources, gameId\)/);
+  assert.match(content, /GAME_IDS = \{ pinpoint: "1", crossclimb: "2", "mini-sudoku": "7" \}/);
+  assert.match(content, /gameUrnFromSources\(sources, GAME_IDS\[currentGame\]\)/);
+  assert.match(content, /if \(!gameUrn\) return false;/);
+  assert.match(content, /match\[0\]\.includes\(`,\$\{gameId\},`\)/);
+  assert.match(content, /async function requestGameQueryId\(\)/);
+  assert.match(content, /const gameUrn = gameUrnFromSources\(sources, GAME_IDS\[currentGame\]\);/);
+  assert.match(content, /const csrf = sessionCsrfToken\(sources\);/);
+  assert.match(content, /const queryId = await requestGameQueryId\(\);/);
+  assert.match(content, /if \(!gameUrn \|\| !csrf \|\| !queryId\) return false;/);
+  assert.match(content, /resourceKey: gameUrn,/);
   assert.match(content, /gamePlayState: "END_SOLVED"/);
-  assert.match(content, /document\.cookie\.match\(\/JSESSIONID="\?\(\[\^;"\]\+\)\/\)/);
-  assert.match(content, /const csrf = sessionCsrfToken\(bootstrapSources\(\)\) \|\| template\.csrf;/);
+  assert.doesNotMatch(content, /pacificDate|pacificDaysBetween|KNOWN_GAME_IDS|requestGameTemplate/);
   assert.match(content, /payload\.errors\?\.length \|\| payload\.data\?\.errors\?\.length/);
   assert.match(content, /Math\.max\(2, Math\.round\(\(Date\.now\(\) - \(solveStartedAt \|\| Date\.now\(\)\)\) \/ 1000\)\)/);
   assert.match(content, /if \(await submitGameSave\(\{ blueprintGameState[\s\S]*?return;\s*\n\s*\}[\s\S]*?replaceInputText\(input, solutions\[0\]\)/);

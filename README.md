@@ -52,7 +52,7 @@ The extension reads the same accessibility labels and cell metadata that LinkedI
 - Crossclimb: visible clue-to-row matching, ladder ordering, and final-pair entry, with a single-request path when the save shape is known
 - Wend: exact answer paths from the page's delivered grid data
 
-When any LinkedIn game save flows through the tab's network capture — or through the request visibility that trusted-input sessions keep open for two seconds past the last input — the extension remembers the call's query id, CSRF token, and member key, and Pinpoint and Crossclimb then solve with one request each instead of driving the UI. The capture matches any GraphQL call carrying a game record, so logic-game saves teach the same template. The first solve in a fresh browser session falls back to the verified UI path (which also teaches the request shape), and any rejected or malformed request falls straight back to the UI solver, so a solve never depends on the private endpoint alone.
+Pinpoint and Crossclimb solve with a single request each: the page's own embedded data declares the exact game URN (member, game id, and current day) for the board it is serving, and the solver replays LinkedIn's own save mutation with the solved state, deriving its CSRF token from the current session. Nothing is learned or stored — every fact comes from the page being solved. Any missing fact, rejected request, or in-envelope mutation error falls straight back to the verified UI solver, so a solve never depends on the private endpoint alone.
 
 Word-game parsers preserve valid embedded JSON before peeling wrapper escaping, so quoted clue and answer text cannot corrupt otherwise complete puzzle data.
 

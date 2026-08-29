@@ -504,14 +504,25 @@
     return null;
   }
 
+  // Game ids observed for LinkedIn's word games; a captured save overrides
+  // or extends these.
+  const KNOWN_GAME_IDS = { blueprintGameState: "1", crossClimbGameState: "2" };
+
+  function puzzleDayFromPage() {
+    const text = gameAreaText();
+    return text.match(/#(\d+)\b/)?.[1] || text.match(/\bNO\.(\d+)/i)?.[1] || null;
+  }
+
   // Replays LinkedIn's own game-save GraphQL call with the solved state. Any
   // failure returns false so the caller falls back to the UI solver, whose
   // behavior is exactly what produced the captured template.
   async function submitGameSave(gameStateUnion) {
     const template = await requestGameTemplate();
     const stateKey = Object.keys(gameStateUnion)[0];
-    const resourceKey = template?.saves?.[stateKey];
-    if (!template?.queryId || !resourceKey) return false;
+    const gameId = template?.saves?.[stateKey] || KNOWN_GAME_IDS[stateKey];
+    if (!template?.queryId || !template?.member || !gameId) return false;
+    const puzzleDay = puzzleDayFromPage();
+    if (!puzzleDay) return false;
     const csrf = sessionCsrfToken(bootstrapSources()) || template.csrf;
     if (!csrf) return false;
     const elapsedSeconds = Math.max(2, Math.round((Date.now() - (solveStartedAt || Date.now())) / 1000));
@@ -527,7 +538,7 @@
               gameStateUnion,
             },
           },
-          resourceKey,
+          resourceKey: `urn:li:fsd_game:(${template.member},${gameId},${puzzleDay})`,
         },
       },
       queryId: template.queryId,

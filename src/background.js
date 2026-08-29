@@ -17,11 +17,30 @@ const puzzleSources = new Map();
 const CAPTURE_LEASE_MS = 15 * 60 * 1000;
 const MAX_PERSISTED_SOURCE_CHARS = 6 * 1024 * 1024;
 
-// The last observed games GraphQL saves: { queryId, csrf, saves } where saves
-// maps each game's state key (e.g. crossClimbGameState) to the exact
-// resourceKey LinkedIn saved with, so replays never have to re-derive the
-// member, game id, or puzzle day from page text.
+// The last observed games GraphQL saves: { queryId, member, saves } where
+// saves maps each game's state key (e.g. crossClimbGameState) to its game id.
+// Member ids and game ids are stable product constants, so the template lives
+// in storage.local and stays valid across browser restarts and days; the
+// puzzle day itself comes from the current page at replay time.
+const TEMPLATE_STORAGE_KEY = "llsGameTemplate";
 let gameTemplate = null;
+
+async function loadGameTemplate() {
+  if (gameTemplate) return gameTemplate;
+  try {
+    const stored = await chrome.storage.local.get(TEMPLATE_STORAGE_KEY);
+    gameTemplate = stored[TEMPLATE_STORAGE_KEY] || null;
+  } catch {
+    gameTemplate = null;
+  }
+  return gameTemplate;
+}
+
+function persistGameTemplate() {
+  chrome.storage.local.set({ [TEMPLATE_STORAGE_KEY]: gameTemplate }).catch(() => {
+    // Losing restart durability only costs one UI-taught solve.
+  });
+}
 
 function debug(...args) {
   console.log("[lls-bg]", ...args);
@@ -40,7 +59,7 @@ function loadSessionState() {
       for (const [tabId, route] of Object.entries(state?.llsPuzzleState?.routes || {})) {
         if (!puzzleRoutes.has(Number(tabId))) puzzleRoutes.set(Number(tabId), route);
       }
-      if (!gameTemplate && state?.llsPuzzleState?.template) gameTemplate = state.llsPuzzleState.template;    }).catch(() => {
+    }).catch(() => {
       // In-memory capture still covers pages solved in this service worker run.
     });
   }
@@ -63,7 +82,7 @@ function persistSessionState() {
   }
   const routes = {};
   for (const [tabId, route] of puzzleRoutes) routes[tabId] = route;
-  chrome.storage.session.set({ llsPuzzleState: { sources, routes, template: gameTemplate } }).catch(() => {
+  chrome.storage.session.set({ llsPuzzleState: { sources, routes } }).catch(() => {
     // Exceeding the session quota only costs restart durability.
   });
 }
@@ -340,8 +359,9 @@ async function handleMessage(message, sender) {
   }
 
   if (message?.type === "lls-game-template") {
-    debug("template request", tabId, gameTemplate ? "hit" : "miss");
-    return { ok: true, template: gameTemplate };
+    const template = await loadGameTemplate();
+    debug("template request", tabId, template ? "hit" : "miss");
+    return { ok: true, template };
   }
 
   if (message?.type === "lls-capture-start") {
@@ -496,7 +516,7 @@ chrome.debugger.onDetach.addListener((source) => {
   }
 });
 
-chrome.debugger.onEvent.addListener((source, method, params) => {
+chrome.debugger.onEvent.addListener(async (source, method, params) => {
   const tabId = source.tabId;
   if (!Number.isInteger(tabId)) return;
   // Template capture runs whenever any Network events reach us (word-game
@@ -513,16 +533,17 @@ chrome.debugger.onEvent.addListener((source, method, params) => {
         const record = body?.variables?.entity?.entity?.gameStoredRecord;
         const stateUnion = record?.gameStateUnion || {};
         const stateKey = Object.keys(stateUnion)[0];
-        const resourceKey = body?.variables?.entity?.resourceKey;
-        if (stateKey && resourceKey) {
+        const resourceParts = String(body?.variables?.entity?.resourceKey || "").match(/\(([^,]+),(\d+),(\d+)\)/);
+        if (stateKey && resourceParts) {
+          const known = (await loadGameTemplate()) || {};
           gameTemplate = {
-            queryId: url.match(/[?&]queryId=([^&]+)/)?.[1] || null,
-            csrf: params.request.headers?.["csrf-token"] || params.request.headers?.["Csrf-Token"] || gameTemplate?.csrf,
-            saves: { ...gameTemplate?.saves, [stateKey]: resourceKey },
+            queryId: url.match(/[?&]queryId=([^&]+)/)?.[1] || known.queryId,
+            member: resourceParts[1],
+            saves: { ...known.saves, [stateKey]: resourceParts[2] },
           };
           if (gameTemplate.queryId) {
-            persistSessionState();
-            debug("game save", tabId, stateKey, resourceKey);
+            persistGameTemplate();
+            debug("game save", tabId, stateKey, "gameId", resourceParts[2]);
           }
         }
       } catch {

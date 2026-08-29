@@ -115,10 +115,15 @@ test("solves keep working in occluded and background tabs", () => {
 test("pinpoint and crossclimb replay LinkedIn's own save call with a UI fallback", () => {
   assert.match(background, /let gameTemplate = null/);
   assert.match(background, /gameStoredRecord/);
-  assert.match(background, /queryId: url\.match\(\/\[\?&\]queryId=\(\[\^&\]\+\)\/\)\?\.\[1\] \|\| null/);
+  assert.match(background, /queryId: url\.match\(\/\[\?&\]queryId=\(\[\^&\]\+\)\/\)\?\.\[1\] \|\| known\.queryId/);
   assert.match(background, /setTimeout\(\(\) => void detachIfIdle\(tabId\), 2000\)/);
   assert.match(background, /message\?\.type === "lls-game-template"/);
-  assert.match(background, /template: gameTemplate \}/);
+  assert.match(background, /await loadGameTemplate\(\)/);
+  assert.match(background, /TEMPLATE_STORAGE_KEY = "llsGameTemplate"/);
+  assert.match(background, /saves: \{ \.\.\.known\.saves, \[stateKey\]: resourceParts\[2\] \}/);
+  assert.match(content, /KNOWN_GAME_IDS = \{ blueprintGameState: "1", crossClimbGameState: "2" \}/);
+  assert.match(content, /function puzzleDayFromPage\(\)/);
+  assert.match(content, /text\.match\(\/#\(\\d\+\)\\b\/\)\?\.\[1\] \|\| text\.match\(\/\\bNO\\\.\(\\d\+\)\/i\)/);
   assert.match(content, /async function submitGameSave\(gameStateUnion\)/);
   assert.match(content, /gameStoredRecord/);
   assert.match(content, /blueprintGameState: \[solutions\[0\]\]/);

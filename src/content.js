@@ -524,9 +524,11 @@
 
   // Replays LinkedIn's own game-save GraphQL call with the solved state.
   // Everything the call needs — the game URN, answers, and CSRF — comes from
-  // the page being solved, so no state is learned or stored. Any failure
-  // returns false so the caller falls back to the UI solver.
-  async function submitGameSave(gameStateUnion) {
+  // the page being solved, so no state is learned or stored. recordExtras
+  // mirrors each game's captured save shape exactly (Pinpoint's is minimal;
+  // Crossclimb adds timeElapsed and isFlawless). Any failure returns false so
+  // the caller falls back to the UI solver.
+  async function submitGameSave(gameStateUnion, recordExtras = {}) {
     const sources = bootstrapSources();
     // A wrong-game URN would corrupt another game's record, so only replay
     // when the current game's id is known and its URN is present.
@@ -535,16 +537,13 @@
     const csrf = sessionCsrfToken(sources);
     const queryId = await requestGameQueryId();
     if (!gameUrn || !csrf || !queryId) return false;
-    const elapsedSeconds = Math.max(2, Math.round((Date.now() - (solveStartedAt || Date.now())) / 1000));
     const body = {
       variables: {
         entity: {
           entity: {
             gameStoredRecord: {
               gamePlayState: "END_SOLVED",
-              timeElapsed: elapsedSeconds,
-              isFlawless: true,
-              completionAttributes: { isHintFree: true, isMistakeFree: true },
+              ...recordExtras,
               gameStateUnion,
             },
           },
@@ -595,7 +594,9 @@
     }
     const solutions = await parsePuzzleData(solvers.parsePinpointSolutions);
     setStatus("Submitting the category…", "working");
-    if (await submitGameSave({ blueprintGameState: [solutions[0]] })) {
+    if (await submitGameSave({ blueprintGameState: [solutions[0]] }, {
+      completionAttributes: { isMistakeFree: true },
+    })) {
       solveSuccessMessage = "Solved with a single request.";
       setStatus(solveSuccessMessage, "success");
       return;
@@ -717,7 +718,11 @@
       word: rung.word.toLowerCase(),
       guess: rung.word.toUpperCase().split("").join("&-*"),
     }));
-    if (await submitGameSave({ crossClimbGameState: requestState })) {
+    if (await submitGameSave({ crossClimbGameState: requestState }, {
+      timeElapsed: Math.max(2, Math.round((Date.now() - (solveStartedAt || Date.now())) / 1000)),
+      isFlawless: true,
+      completionAttributes: { isHintFree: true, isMistakeFree: true },
+    })) {
       solveSuccessMessage = "Solved with a single request.";
       setStatus(solveSuccessMessage, "success");
       return;
@@ -1158,6 +1163,16 @@
     const board = await waitForBoard(parseSudokuBoard);
     const solution = solvers.solveSudoku(board);
     setStatus("Entering digits…", "working");
+    // Mini Sudoku's save carries the player-entered cells only (givens stay
+    // out), one {cellIdx, cellValue} entry apiece.
+    if (await submitGameSave({
+      miniSudokuGameState: solution.flatMap((value, index) =>
+        board.givens[index] ? [] : [{ cellIdx: index, cellContentUnion: { cellValue: value } }]),
+    }, { completionAttributes: { isMistakeFree: true, isHintFree: true } })) {
+      solveSuccessMessage = "Solved with a single request.";
+      setStatus(solveSuccessMessage, "success");
+      return;
+    }
     let pendingCells = board.cells.reduce((count, cell, index) =>
       count + (Number((cell.textContent || "").trim()) === solution[index] ? 0 : 1), 0);
     for (let index = 0; index < board.cells.length; index += 1) {

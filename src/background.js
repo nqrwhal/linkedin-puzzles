@@ -23,14 +23,34 @@ const DEFAULT_GAME_QUERY_ID = "voyagerIdentityDashGames.f8508525e36bee5f9a5ab6b6
 let observedGameQueryId = null;
 
 // Full-session request recording: every LinkedIn request seen on the
-// debugger session, dumped on demand for offline protocol analysis.
+// debugger session, dumped on demand for offline protocol analysis. Logs are
+// mirrored into session storage so a service-worker restart mid-run does not
+// silently drop a game's captured save.
 const sessionCapture = new Map();
+const CAPTURE_LOG_PREFIX = "llsReqLog";
 
 function recordSessionRequest(tabId, entry) {
   const log = sessionCapture.get(tabId) || [];
   log.push(entry);
   if (log.length > 800) log.shift();
   sessionCapture.set(tabId, log);
+  chrome.storage.session?.set({ [`${CAPTURE_LOG_PREFIX}${tabId}`]: log }).catch(() => {
+    // Losing the mirror only costs captures across a worker restart.
+  });
+}
+
+async function capturedRequests(tabId) {
+  let log = sessionCapture.get(tabId);
+  if (!log) {
+    try {
+      const stored = await chrome.storage.session?.get(`${CAPTURE_LOG_PREFIX}${tabId}`);
+      log = stored?.[`${CAPTURE_LOG_PREFIX}${tabId}`] || [];
+      sessionCapture.set(tabId, log);
+    } catch {
+      log = [];
+    }
+  }
+  return log;
 }
 
 function debug(...args) {
@@ -354,7 +374,7 @@ async function handleMessage(message, sender) {
   }
 
   if (message?.type === "lls-debug-requests") {
-    return { ok: true, requests: sessionCapture.get(tabId) || [] };
+    return { ok: true, requests: await capturedRequests(tabId) };
   }
 
   if (message?.type === "lls-capture-start") {
@@ -575,6 +595,8 @@ chrome.tabs?.onRemoved.addListener((tabId) => {
   puzzleRoutes.delete(tabId);
   pageScanTimes.delete(tabId);
   puzzleSources.delete(tabId);
+  sessionCapture.delete(tabId);
+  chrome.storage.session?.remove(`${CAPTURE_LOG_PREFIX}${tabId}`).catch(() => {});
   persistSessionState();
   void forceDetach(tabId);
 });
@@ -585,6 +607,8 @@ chrome.tabs?.onUpdated.addListener((tabId, changeInfo, tab) => {
     puzzleSources.delete(tabId);
     pendingPuzzleResponses.delete(tabId);
     pageScanTimes.delete(tabId);
+    sessionCapture.delete(tabId);
+    chrome.storage.session?.remove(`${CAPTURE_LOG_PREFIX}${tabId}`).catch(() => {});
     persistSessionState();
   }
   if (!changeInfo.url && changeInfo.status !== "loading") return;

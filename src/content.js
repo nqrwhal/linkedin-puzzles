@@ -354,12 +354,24 @@
     return rect.top >= 0 && rect.left >= 0 && rect.bottom <= window.innerHeight && rect.right <= window.innerWidth;
   }
 
+  function pointHitsElement(element, x, y) {
+    const hit = document.elementFromPoint(x, y);
+    return hit === element || Boolean(hit?.contains(element)) || Boolean(element?.contains(hit));
+  }
+
   async function clickElement(element) {
     assertStillSolving();
     // Scrolling under a parked physical cursor makes Chrome dispatch real
     // boundary events into the page; only scroll when the target needs it.
     if (!elementFullyInView(element)) element.scrollIntoView({ block: "nearest", inline: "nearest" });
-    const rect = element.getBoundingClientRect();
+    let rect = element.getBoundingClientRect();
+    // Sticky headers cover cells that scrollIntoView considers "visible";
+    // verify hit-testing and move the target to the viewport center when an
+    // overlay would swallow the trusted click.
+    if (!pointHitsElement(element, rect.left + rect.width / 2, rect.top + rect.height / 2)) {
+      element.scrollIntoView({ block: "center", inline: "center" });
+      rect = element.getBoundingClientRect();
+    }
     const point = { x: rect.left + rect.width / 2, y: rect.top + rect.height / 2 };
     await mouseSequence([
       { eventType: "mouseMoved", point, buttons: 0 },
@@ -422,6 +434,20 @@
     setStatus("Starting the game…", "working");
     await clickElement(gateControl);
     await waitUntil(() => gameControls("button, [role='button'], a[href]").filter(isGateControl).every((element) => !element.isConnected), 6000);
+  }
+
+  async function collapseInstructionPanels() {
+    // LinkedIn serves an expandable "game instructions/examples" panel (with a
+    // Collapse control, no Dismiss) that covers the board and swallows
+    // trusted clicks; daily players rarely see it, fresh sessions do.
+    const isCollapse = (button) =>
+      /^collapse game (instructions|examples|tutorial)/i.test(`${button.getAttribute("aria-label") || ""} ${button.textContent || ""}`.trim());
+    for (let round = 0; round < 3; round += 1) {
+      const collapse = gameControls("button").find(isCollapse);
+      if (!collapse) return;
+      await clickElement(collapse);
+      await waitUntil(() => !collapse.isConnected, 2000);
+    }
   }
 
   async function dismissTutorialDialog() {
@@ -1168,7 +1194,11 @@
     if (await submitGameSave({
       miniSudokuGameState: solution.flatMap((value, index) =>
         board.givens[index] ? [] : [{ cellIdx: index, cellContentUnion: { cellValue: value } }]),
-    }, { completionAttributes: { isMistakeFree: true, isHintFree: true } })) {
+    }, {
+      timeElapsed: Math.max(2, Math.round((Date.now() - (solveStartedAt || Date.now())) / 1000)),
+      isFlawless: true,
+      completionAttributes: { isHintFree: true, isMistakeFree: true },
+    })) {
       solveSuccessMessage = "Solved with a single request.";
       setStatus(solveSuccessMessage, "success");
       return;
@@ -1421,6 +1451,7 @@
       await beginTrustedInput();
       await startGameIfNeeded();
       await dismissTutorialDialog();
+      await collapseInstructionPanels();
       await GAME_SOLVERS[game]();
       assertStillSolving();
       setStatus(solveSuccessMessage, "success");

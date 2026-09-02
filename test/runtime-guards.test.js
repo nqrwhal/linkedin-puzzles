@@ -145,6 +145,15 @@ test("anonymous first-visit launch gates are clicked through", () => {
   assert.match(content, /await startGameIfNeeded\(\);/);
 });
 
+test("clicks verify hit-testing and instruction panels collapse before solves", () => {
+  assert.match(content, /async function collapseInstructionPanels\(\)/);
+  assert.match(content, /collapse game \(instructions\|examples\|tutorial\)/);
+  assert.match(content, /await collapseInstructionPanels\(\);/);
+  assert.match(content, /function pointHitsElement\(element, x, y\)/);
+  assert.match(content, /if \(!pointHitsElement\(element, rect\.left \+ rect\.width \/ 2, rect\.top \+ rect\.height \/ 2\)\)/);
+  assert.match(content, /scrollIntoView\(\{ block: "center", inline: "center" \}\)/);
+});
+
 test("completed boards and slow pads do not derail solves", () => {
   assert.match(content, /gameControls\("input"\)\.filter\(\(input\) => input\.closest\("\[aria-label\^='Row'\]"\)\)/);
   assert.match(content, /let numberButton = null;[\s\S]*?await waitUntil\(\(\) => \{\s*numberButton =/);

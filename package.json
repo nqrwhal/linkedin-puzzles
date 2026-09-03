@@ -1,6 +1,6 @@
 {
   "name": "linkedin-logic-solver",
-  "version": "0.6.3",
+  "version": "0.6.4",
   "private": true,
   "scripts": {
     "test": "node --test"

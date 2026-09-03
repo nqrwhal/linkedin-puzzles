@@ -192,3 +192,20 @@ test("Tango maps LinkedIn's current Sun and Moon markup to its click cycle", () 
   assert.match(content, /svg\[aria-label='Sun'\], \[data-testid='cell-zero'\][\s\S]*?return 1/);
   assert.match(content, /svg\[aria-label='Moon'\], \[data-testid='cell-one'\][\s\S]*?return 0/);
 });
+
+test("request recorder survives completion navigations and Patches resumes cleanly", () => {
+  // The END_SOLVED save fires immediately before the results navigation; a
+  // wipe on "loading" erased exactly that request from the dump.
+  assert.match(background, /function rotateSessionCapture\(tabId\)/);
+  assert.match(background, /changeInfo\.status === "loading"[\s\S]*?rotateSessionCapture\(tabId\)/);
+  assert.doesNotMatch(background, /changeInfo\.status === "loading"[\s\S]{0,400}?sessionCapture\.delete\(tabId\)/);
+  assert.match(background, /capturedRequests\(tabId, \{ includePrevious: Boolean\(message\.all\) \}\)/);
+  // Queens, Tango, and Zip debounce their final save past the old 30s detach.
+  assert.match(background, /setTimeout\(\(\) => void detachIfIdle\(tabId\), 120000\)/);
+  // A previously failed Patches solve leaves drawn regions that corrupt a
+  // re-parse; the solver undoes them and retries drags on a slower ladder.
+  assert.match(content, /async function undoDrawnPatches\(\)/);
+  assert.match(content, /coveredCells = \(\) =>[\s\S]*?in \(drawn \)\?region/);
+  assert.match(content, /Undo the previous Patches attempt before solving/);
+  assert.match(content, /for \(const stepDelay of \[5, 12, 25\]\)/);
+});

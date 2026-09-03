@@ -1309,7 +1309,29 @@
     await mouseSequence(steps, stepDelay);
   }
 
+  async function undoDrawnPatches() {
+    // A previously failed solve leaves drawn rectangles on the board; their
+    // cells then read "in drawn region"/"in region with clue at row X column
+    // Y" instead of bare coordinates, and re-parsing that board misassigns
+    // clues. Undo returns the board to a clean state before parsing.
+    const coveredCells = () => [...document.querySelectorAll("[data-cell-idx][data-testid^='cell-'][aria-label]")]
+      .filter((element) => /\bin (drawn )?region\b/i.test(element.getAttribute("aria-label") || ""));
+    if (!coveredCells().length) return;
+    for (let round = 0; round < 16; round += 1) {
+      const undo = gameControls("button, [role='button']").find((element) =>
+        /^undo$/i.test(`${element.getAttribute("aria-label") || ""} ${element.textContent || ""}`.trim()));
+      if (!undo) break;
+      const before = coveredCells().length;
+      await clickElement(undo);
+      await waitUntil(() => coveredCells().length !== before, RENDER_SETTLE_TIMEOUT_MS);
+      if (!coveredCells().length) return;
+    }
+    if (coveredCells().length) throw new Error("Undo the previous Patches attempt before solving.");
+  }
+
   async function solvePatchesGame() {
+    if (acceptedSolutionVisible()) return;
+    await undoDrawnPatches();
     const board = await waitForBoard(parsePatchesBoard);
     const rectangles = solvers.solvePatches(board);
     setStatus("Drawing patches…", "working");
@@ -1321,23 +1343,18 @@
       const findRectangleElements = () => [clueCell, topLeft, bottomRight].map((index) =>
         document.querySelector(`[data-testid='cell-${index}'][data-cell-idx]`),
       );
-      let elements = findRectangleElements();
-      if (elements.some((element) => !element)) throw new Error("A Patches rectangle cell is missing.");
       const getCells = () => [...document.querySelectorAll("[data-cell-idx][data-testid^='cell-'][aria-label]")];
-      const before = elementVisualSignature(getCells());
       if (clueIndex === rectangles.length - 1) await waitForSignedInCompletion();
-      await dragThrough(elements, { stepDelay: 5 });
-      if (!(await waitForVisualChange(getCells, before, RENDER_SETTLE_TIMEOUT_MS))) {
-        if (acceptedSolutionVisible()) break;
-        elements = findRectangleElements();
-        if (elements.some((element) => !element)) throw new Error("A Patches rectangle cell disappeared before retrying.");
-        const retryBefore = elementVisualSignature(getCells());
-        await dragThrough(elements, { stepDelay: 8 });
-        if (!(await waitForVisualChange(getCells, retryBefore, RENDER_SETTLE_TIMEOUT_MS))) {
-          if (acceptedSolutionVisible()) break;
-          throw new Error(`Patches rectangle ${clueIndex + 1} did not render after retrying.`);
-        }
+      let placed = false;
+      for (const stepDelay of [5, 12, 25]) {
+        const elements = findRectangleElements();
+        if (elements.some((element) => !element)) throw new Error("A Patches rectangle cell is missing.");
+        const before = elementVisualSignature(getCells());
+        await dragThrough(elements, { stepDelay });
+        if (await waitForVisualChange(getCells, before, RENDER_SETTLE_TIMEOUT_MS)) { placed = true; break; }
+        if (acceptedSolutionVisible()) { placed = true; break; }
       }
+      if (!placed) throw new Error(`Patches rectangle ${clueIndex + 1} did not render after retrying.`);
     }
     if (!(await waitForAcceptedSolution())) throw new Error("LinkedIn did not accept the Patches solution.");
   }

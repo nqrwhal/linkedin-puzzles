@@ -27,7 +27,9 @@ let observedGameQueryId = null;
 // mirrored into session storage so a service-worker restart mid-run does not
 // silently drop a game's captured save.
 const sessionCapture = new Map();
+const previousCapture = new Map();
 const CAPTURE_LOG_PREFIX = "llsReqLog";
+const PREVIOUS_CAPTURE_PREFIX = "llsReqLogPrev";
 
 function recordSessionRequest(tabId, entry) {
   const log = sessionCapture.get(tabId) || [];
@@ -39,7 +41,22 @@ function recordSessionRequest(tabId, entry) {
   });
 }
 
-async function capturedRequests(tabId) {
+// Games fire their END_SOLVED save immediately before the completion
+// navigation replaces the document; a plain wipe on "loading" erased exactly
+// the requests protocol analysis needs. Rotate the outgoing document's log
+// into a previous-document bucket instead.
+function rotateSessionCapture(tabId) {
+  const outgoing = sessionCapture.get(tabId);
+  if (outgoing?.length) {
+    const kept = outgoing.slice(-400);
+    previousCapture.set(tabId, kept);
+    chrome.storage.session?.set({ [`${PREVIOUS_CAPTURE_PREFIX}${tabId}`]: kept }).catch(() => {});
+  }
+  sessionCapture.delete(tabId);
+  chrome.storage.session?.remove(`${CAPTURE_LOG_PREFIX}${tabId}`).catch(() => {});
+}
+
+async function capturedRequests(tabId, { includePrevious = false } = {}) {
   let log = sessionCapture.get(tabId);
   if (!log) {
     try {
@@ -50,7 +67,18 @@ async function capturedRequests(tabId) {
       log = [];
     }
   }
-  return log;
+  if (!includePrevious) return log;
+  let previous = previousCapture.get(tabId);
+  if (!previous) {
+    try {
+      const stored = await chrome.storage.session?.get(`${PREVIOUS_CAPTURE_PREFIX}${tabId}`);
+      previous = stored?.[`${PREVIOUS_CAPTURE_PREFIX}${tabId}`] || [];
+      previousCapture.set(tabId, previous);
+    } catch {
+      previous = [];
+    }
+  }
+  return [...previous, ...log];
 }
 
 function debug(...args) {
@@ -374,7 +402,7 @@ async function handleMessage(message, sender) {
   }
 
   if (message?.type === "lls-debug-requests") {
-    return { ok: true, requests: await capturedRequests(tabId) };
+    return { ok: true, requests: await capturedRequests(tabId, { includePrevious: Boolean(message.all) }) };
   }
 
   if (message?.type === "lls-capture-start") {
@@ -450,9 +478,11 @@ async function handleMessage(message, sender) {
   if (message?.type === "lls-input-stop") {
     inputTabs.delete(tabId);
     clearTimer(inputTimers, tabId);
-    // Games debounce their final save well past the last input, so keep the
-    // debugger link (and request visibility) attached long enough to see it.
-    setTimeout(() => void detachIfIdle(tabId), 30000);
+    // Queens, Tango, and Zip debounce their END_SOLVED save more than 30s
+    // past the last input; detaching at 30s silently dropped those saves from
+    // the recorder. Two minutes covers every observed save cadence while the
+    // input-safety timer still bounds a solve that never reports completion.
+    setTimeout(() => void detachIfIdle(tabId), 120000);
     return { ok: true };
   }
 
@@ -596,7 +626,9 @@ chrome.tabs?.onRemoved.addListener((tabId) => {
   pageScanTimes.delete(tabId);
   puzzleSources.delete(tabId);
   sessionCapture.delete(tabId);
+  previousCapture.delete(tabId);
   chrome.storage.session?.remove(`${CAPTURE_LOG_PREFIX}${tabId}`).catch(() => {});
+  chrome.storage.session?.remove(`${PREVIOUS_CAPTURE_PREFIX}${tabId}`).catch(() => {});
   persistSessionState();
   void forceDetach(tabId);
 });
@@ -607,8 +639,7 @@ chrome.tabs?.onUpdated.addListener((tabId, changeInfo, tab) => {
     puzzleSources.delete(tabId);
     pendingPuzzleResponses.delete(tabId);
     pageScanTimes.delete(tabId);
-    sessionCapture.delete(tabId);
-    chrome.storage.session?.remove(`${CAPTURE_LOG_PREFIX}${tabId}`).catch(() => {});
+    rotateSessionCapture(tabId);
     persistSessionState();
   }
   if (!changeInfo.url && changeInfo.status !== "loading") return;

@@ -513,8 +513,10 @@
   const GAME_IDS = { pinpoint: "1", crossclimb: "2", "mini-sudoku": "7" };
 
   function gameUrnFromSources(sources, gameId) {
+    let fallback = null;
     for (const source of sources) {
       for (const match of source.matchAll(/urn:li:fsd_game:\([^)]+,\d+,\d+\)/g)) {
+        if (!fallback) fallback = match[0];
         if (gameId && match[0].includes(`,${gameId},`)) return match[0];
       }
     }
@@ -526,15 +528,16 @@
       const response = await chrome.runtime.sendMessage({ type: "lls-game-query-id" });
       if (response?.ok && response.queryId) return response.queryId;
     } catch {
-      // Fall back to UI input when the worker is unavailable.
+      // The shipped default still applies.
     }
     return null;
   }
 
   function sessionCsrfToken(sources) {
     // LinkedIn's csrf-token header is the session's JSESSIONID cookie value,
-    // which the page can read directly. Deriving it per page handles separate
-    // normal/incognito sessions and token rotation; the bootstrap form is a
+    // which the page can read directly. Deriving it per page keeps a template
+    // learned in one window (e.g. normal) valid in another (e.g. incognito)
+    // and survives token rotation; the serialized bootstrap form is a
     // fallback for pages where the cookie is not reachable.
     const cookie = document.cookie.match(/JSESSIONID="?([^;"]+)/);
     if (cookie) return cookie[1];

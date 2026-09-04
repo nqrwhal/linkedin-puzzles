@@ -62,9 +62,8 @@ test("Wend touch input stays page-local instead of depending on the service work
 
 test("word-game sources clear before navigation and survive content-script startup", () => {
   assert.match(background, /changeInfo\.status === "loading"[\s\S]*?puzzleSources\.delete\(tabId\)/);
-  assert.match(background, /async function startCapture\(tabId, url\)[\s\S]*?await primeCapture/);
   assert.doesNotMatch(background, /captureDocuments/);
-  assert.doesNotMatch(background, /async function startCapture[\s\S]{0,500}?puzzleSources\.delete/);
+  assert.doesNotMatch(background, /async function primeCapture[\s\S]{0,500}?puzzleSources\.delete/);
 });
 
 test("signed-in solves hold only their final move to a two-second floor", () => {
@@ -193,15 +192,7 @@ test("Tango maps LinkedIn's current Sun and Moon markup to its click cycle", () 
   assert.match(content, /svg\[aria-label='Moon'\], \[data-testid='cell-one'\][\s\S]*?return 0/);
 });
 
-test("request recorder survives completion navigations and Patches resumes cleanly", () => {
-  // The END_SOLVED save fires immediately before the results navigation; a
-  // wipe on "loading" erased exactly that request from the dump.
-  assert.match(background, /function rotateSessionCapture\(tabId\)/);
-  assert.match(background, /changeInfo\.status === "loading"[\s\S]*?rotateSessionCapture\(tabId\)/);
-  assert.doesNotMatch(background, /changeInfo\.status === "loading"[\s\S]{0,400}?sessionCapture\.delete\(tabId\)/);
-  assert.match(background, /capturedRequests\(tabId, \{ includePrevious: Boolean\(message\.all\) \}\)/);
-  // Queens, Tango, and Zip debounce their final save past the old 30s detach.
-  assert.match(background, /setTimeout\(\(\) => void detachIfIdle\(tabId\), 120000\)/);
+test("Patches resumes cleanly", () => {
   // A previously failed Patches solve leaves drawn regions that corrupt a
   // re-parse; the solver undoes them and retries drags on a slower ladder.
   assert.match(content, /async function undoDrawnPatches\(\)/);

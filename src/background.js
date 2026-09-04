@@ -22,65 +22,6 @@ const MAX_PERSISTED_SOURCE_CHARS = 6 * 1024 * 1024;
 const DEFAULT_GAME_QUERY_ID = "voyagerIdentityDashGames.f8508525e36bee5f9a5ab6b637854d87";
 let observedGameQueryId = null;
 
-// Full-session request recording: every LinkedIn request seen on the
-// debugger session, dumped on demand for offline protocol analysis. Logs are
-// mirrored into session storage so a service-worker restart mid-run does not
-// silently drop a game's captured save.
-const sessionCapture = new Map();
-const previousCapture = new Map();
-const CAPTURE_LOG_PREFIX = "llsReqLog";
-const PREVIOUS_CAPTURE_PREFIX = "llsReqLogPrev";
-
-function recordSessionRequest(tabId, entry) {
-  const log = sessionCapture.get(tabId) || [];
-  log.push(entry);
-  if (log.length > 800) log.shift();
-  sessionCapture.set(tabId, log);
-  chrome.storage.session?.set({ [`${CAPTURE_LOG_PREFIX}${tabId}`]: log }).catch(() => {
-    // Losing the mirror only costs captures across a worker restart.
-  });
-}
-
-// Games fire their END_SOLVED save immediately before the completion
-// navigation replaces the document; a plain wipe on "loading" erased exactly
-// the requests protocol analysis needs. Rotate the outgoing document's log
-// into a previous-document bucket instead.
-function rotateSessionCapture(tabId) {
-  const outgoing = sessionCapture.get(tabId);
-  if (outgoing?.length) {
-    const kept = outgoing.slice(-400);
-    previousCapture.set(tabId, kept);
-    chrome.storage.session?.set({ [`${PREVIOUS_CAPTURE_PREFIX}${tabId}`]: kept }).catch(() => {});
-  }
-  sessionCapture.delete(tabId);
-  chrome.storage.session?.remove(`${CAPTURE_LOG_PREFIX}${tabId}`).catch(() => {});
-}
-
-async function capturedRequests(tabId, { includePrevious = false } = {}) {
-  let log = sessionCapture.get(tabId);
-  if (!log) {
-    try {
-      const stored = await chrome.storage.session?.get(`${CAPTURE_LOG_PREFIX}${tabId}`);
-      log = stored?.[`${CAPTURE_LOG_PREFIX}${tabId}`] || [];
-      sessionCapture.set(tabId, log);
-    } catch {
-      log = [];
-    }
-  }
-  if (!includePrevious) return log;
-  let previous = previousCapture.get(tabId);
-  if (!previous) {
-    try {
-      const stored = await chrome.storage.session?.get(`${PREVIOUS_CAPTURE_PREFIX}${tabId}`);
-      previous = stored?.[`${PREVIOUS_CAPTURE_PREFIX}${tabId}`] || [];
-      previousCapture.set(tabId, previous);
-    } catch {
-      previous = [];
-    }
-  }
-  return [...previous, ...log];
-}
-
 function debug(...args) {
   console.log("[lls-bg]", ...args);
 }
@@ -346,14 +287,6 @@ function stopCapture(tabId) {
   void detachIfIdle(tabId);
 }
 
-async function startCapture(tabId, url) {
-  syncPuzzleRoute(tabId, url);
-  // Navigation and route-change listeners clear stale sources before the new
-  // response arrives. Never clear here: onUpdated may already have captured
-  // this document's one-shot puzzle payload before its content script starts.
-  await primeCapture(tabId, url);
-}
-
 async function primeCapture(tabId, url) {
   syncPuzzleRoute(tabId, url);
   await ensureAttached(tabId);
@@ -401,12 +334,8 @@ async function handleMessage(message, sender) {
     return { ok: true, queryId: observedGameQueryId || DEFAULT_GAME_QUERY_ID };
   }
 
-  if (message?.type === "lls-debug-requests") {
-    return { ok: true, requests: await capturedRequests(tabId, { includePrevious: Boolean(message.all) }) };
-  }
-
   if (message?.type === "lls-capture-start") {
-    await startCapture(tabId, sender.url);
+    await primeCapture(tabId, sender.url);
     return { ok: true };
   }
 
@@ -462,8 +391,7 @@ async function handleMessage(message, sender) {
     await ensureAttached(tabId);
     inputTabs.add(tabId);
     armInputSafety(tabId);
-    // Watching requests during trusted input also lets logic-game saves
-    // teach the replay template, which word-game capture already covers.
+    // Observe save-query ids during input without retaining request bodies.
     try {
       await chrome.debugger.sendCommand({ tabId }, "Network.enable", {
         maxResourceBufferSize: 4 * 1024 * 1024,
@@ -478,11 +406,7 @@ async function handleMessage(message, sender) {
   if (message?.type === "lls-input-stop") {
     inputTabs.delete(tabId);
     clearTimer(inputTimers, tabId);
-    // Queens, Tango, and Zip debounce their END_SOLVED save more than 30s
-    // past the last input; detaching at 30s silently dropped those saves from
-    // the recorder. Two minutes covers every observed save cadence while the
-    // input-safety timer still bounds a solve that never reports completion.
-    setTimeout(() => void detachIfIdle(tabId), 120000);
+    await detachIfIdle(tabId);
     return { ok: true };
   }
 
@@ -562,20 +486,8 @@ chrome.debugger.onDetach.addListener((source) => {
 chrome.debugger.onEvent.addListener(async (source, method, params) => {
   const tabId = source.tabId;
   if (!Number.isInteger(tabId)) return;
-  // Full-session request recording plus query-id observation run on any
-  // Network events (word-game capture or trusted-input sessions alike).
   if (method === "Network.requestWillBeSent") {
     const req = params?.request || {};
-    if (/linkedin\.com/.test(req.url || "") && !/\.(js|css|png|svg|gif|ico|woff2?)/i.test(req.url)) {
-      // Flagship rsc-action bodies carry the sdui stack's updateGameState
-      // saves; their states array sits past 4k characters.
-      const isRscAction = /\/flagship-web\/rsc-action\//.test(req.url || "");
-      recordSessionRequest(tabId, {
-        method: req.method,
-        url: String(req.url).slice(0, 400),
-        postData: req.postData ? String(req.postData).slice(0, isRscAction ? 20000 : 4000) : null,
-      });
-    }
     // The save mutation's query id is the only learned fact replays need;
     // everything else comes statelessly from the page's own embedded data.
     if (/\/voyager\/api\/graphql/.test(req.url || "") && req.postData?.includes("gameStoredRecord")) {
@@ -587,34 +499,12 @@ chrome.debugger.onEvent.addListener(async (source, method, params) => {
     }
   }
 
-  // Queens, Tango, Zip, and Patches never issue an HTTP save; their state
-  // rides the realtime socket opened at page load. Record the socket's
-  // lifecycle and game-bearing frames for protocol analysis.
-  if (method === "Network.webSocketCreated") {
-    recordSessionRequest(tabId, {
-      method: "WS-OPEN",
-      url: String(params?.url || "").slice(0, 400),
-      postData: null,
-    });
-  }
-  if (method === "Network.webSocketFrame") {
-    const frame = params?.response || {};
-    const payload = String(frame.payloadData || "");
-    if (/game|fsd_game|storedRecord|state|queens|tango|zip|patch|solve|board/i.test(payload)) {
-      recordSessionRequest(tabId, {
-        method: `WS-FRAME-${frame.opcode}`,
-        url: `t=${Math.round(frame.time * 1000)}`,
-        postData: payload.slice(0, 4000),
-      });
-    }
-  }
-
   if (!captureTabs.has(tabId)) {
     // A restarted service worker drops its capture bookkeeping while the
     // debugger link and Network domain survive it. Receiving these events
     // again means capture was ours, so re-arm instead of losing the tab's
     // one-shot puzzle payloads.
-    if (method !== "Network.responseReceived") return;
+    if (inputTabs.has(tabId) || method !== "Network.responseReceived") return;
     captureTabs.add(tabId);
     armCaptureStop(tabId);
   }
@@ -650,10 +540,6 @@ chrome.tabs?.onRemoved.addListener((tabId) => {
   puzzleRoutes.delete(tabId);
   pageScanTimes.delete(tabId);
   puzzleSources.delete(tabId);
-  sessionCapture.delete(tabId);
-  previousCapture.delete(tabId);
-  chrome.storage.session?.remove(`${CAPTURE_LOG_PREFIX}${tabId}`).catch(() => {});
-  chrome.storage.session?.remove(`${PREVIOUS_CAPTURE_PREFIX}${tabId}`).catch(() => {});
   persistSessionState();
   void forceDetach(tabId);
 });
@@ -664,7 +550,6 @@ chrome.tabs?.onUpdated.addListener((tabId, changeInfo, tab) => {
     puzzleSources.delete(tabId);
     pendingPuzzleResponses.delete(tabId);
     pageScanTimes.delete(tabId);
-    rotateSessionCapture(tabId);
     persistSessionState();
   }
   if (!changeInfo.url && changeInfo.status !== "loading") return;

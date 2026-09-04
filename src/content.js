@@ -1334,8 +1334,10 @@
     await undoDrawnPatches();
     const board = await waitForBoard(parsePatchesBoard);
     const rectangles = solvers.solvePatches(board);
-    setStatus("Drawing patches…", "working");
+    // Every board change syncs through a flagship server-action round trip,
+    // so a full draw is slow; surface per-rectangle progress for observers.
     for (let clueIndex = 0; clueIndex < rectangles.length; clueIndex += 1) {
+      setStatus(`Drawing patches… (${clueIndex + 1} of ${rectangles.length})`, "working");
       const rectangle = rectangles[clueIndex];
       const clueCell = board.clues[clueIndex].index;
       const topLeft = rectangle.r1 * board.cols + rectangle.c1;

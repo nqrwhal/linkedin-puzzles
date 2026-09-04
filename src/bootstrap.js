@@ -3,15 +3,20 @@
 
   if (globalThis.LinkedInPuzzleBootstrap) return;
 
-  const isWordGame = /^\/games\/(?:view\/)?(?:pinpoint|crossclimb|wend)(?:\/|$)/.test(location.pathname);
-  if (!isWordGame) return;
+  // Network capture must start before the page's realtime WebSocket opens:
+  // queens/tango/zip/patches carry their state over that socket, and frame
+  // events are only delivered for sockets created after Network.enable.
+  const isGamePath = /^\/games\/(?:view\/)?(?:pinpoint|crossclimb|wend|queens|tango|zip|mini-sudoku|patches)(?:\/|$)/.test(location.pathname);
+  if (!isGamePath) return;
 
-  const needsNetworkCapture = /^\/games\/(?:pinpoint|crossclimb|wend)(?:\/|$)/.test(location.pathname);
-  if (window.top === window && needsNetworkCapture) {
+  if (window.top === window) {
     chrome.runtime.sendMessage({ type: "lls-capture-start" }).catch(() => {
       // Puzzle solving can still use bootstrap data if early capture is unavailable.
     });
   }
+
+  const isWordGame = /^\/games\/(?:view\/)?(?:pinpoint|crossclimb|wend)(?:\/|$)/.test(location.pathname);
+  if (!isWordGame) return;
 
   const sources = [];
   const seen = new Set();

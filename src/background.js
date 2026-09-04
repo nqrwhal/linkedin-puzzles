@@ -567,10 +567,13 @@ chrome.debugger.onEvent.addListener(async (source, method, params) => {
   if (method === "Network.requestWillBeSent") {
     const req = params?.request || {};
     if (/linkedin\.com/.test(req.url || "") && !/\.(js|css|png|svg|gif|ico|woff2?)/i.test(req.url)) {
+      // Flagship rsc-action bodies carry the sdui stack's updateGameState
+      // saves; their states array sits past 4k characters.
+      const isRscAction = /\/flagship-web\/rsc-action\//.test(req.url || "");
       recordSessionRequest(tabId, {
         method: req.method,
         url: String(req.url).slice(0, 400),
-        postData: req.postData ? String(req.postData).slice(0, 4000) : null,
+        postData: req.postData ? String(req.postData).slice(0, isRscAction ? 20000 : 4000) : null,
       });
     }
     // The save mutation's query id is the only learned fact replays need;
@@ -581,6 +584,28 @@ chrome.debugger.onEvent.addListener(async (source, method, params) => {
         observedGameQueryId = observed;
         debug("game query id", observed);
       }
+    }
+  }
+
+  // Queens, Tango, Zip, and Patches never issue an HTTP save; their state
+  // rides the realtime socket opened at page load. Record the socket's
+  // lifecycle and game-bearing frames for protocol analysis.
+  if (method === "Network.webSocketCreated") {
+    recordSessionRequest(tabId, {
+      method: "WS-OPEN",
+      url: String(params?.url || "").slice(0, 400),
+      postData: null,
+    });
+  }
+  if (method === "Network.webSocketFrame") {
+    const frame = params?.response || {};
+    const payload = String(frame.payloadData || "");
+    if (/game|fsd_game|storedRecord|state|queens|tango|zip|patch|solve|board/i.test(payload)) {
+      recordSessionRequest(tabId, {
+        method: `WS-FRAME-${frame.opcode}`,
+        url: `t=${Math.round(frame.time * 1000)}`,
+        postData: payload.slice(0, 4000),
+      });
     }
   }
 

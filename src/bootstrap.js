@@ -3,9 +3,7 @@
 
   if (globalThis.LinkedInPuzzleBootstrap) return;
 
-  // Network capture must start before the page's realtime WebSocket opens:
-  // queens/tango/zip/patches carry their state over that socket, and frame
-  // events are only delivered for sockets created after Network.enable.
+  // Capture the native initial save before the board finishes mounting.
   const isGamePath = /^\/games\/(?:view\/)?(?:pinpoint|crossclimb|wend|queens|tango|zip|mini-sudoku|patches)(?:\/|$)/.test(location.pathname);
   if (!isGamePath) return;
 

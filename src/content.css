@@ -21,33 +21,6 @@
 
 #linkedin-logic-solver[hidden] { display: none !important; }
 
-/* Trusted input does not move the physical macOS cursor. Remove the panel from
-   hit testing while solving so a cursor parked over the button cannot interrupt
-   Crossclimb's synthetic row drag. */
-#linkedin-logic-solver[data-solving="true"],
-#linkedin-logic-solver[data-dragging="true"] {
-  pointer-events: none;
-  user-select: none;
-}
-
-/* A parked physical cursor still emits real moves, hovers, and stray clicks.
-   While trusted input runs, a transparent shield over the panel (plus a small
-   halo) swallows them so they never fall through to LinkedIn's handlers; the
-   synthetic input targets game coordinates and never crosses the shield. */
-#linkedin-logic-solver .lls__shield {
-  display: none;
-  position: absolute;
-  inset: -14px;
-  border-radius: 22px;
-  background: transparent;
-  pointer-events: auto;
-}
-
-#linkedin-logic-solver[data-solving="true"] .lls__shield,
-#linkedin-logic-solver[data-dragging="true"] .lls__shield {
-  display: block;
-}
-
 #linkedin-logic-solver .lls__eyebrow {
   margin-bottom: 4px;
   color: var(--lls-green);
@@ -103,3 +76,6 @@
     transform: none;
   }
 }
+
+#linkedin-logic-solver .lls__diagnostics { margin-top: 10px; font-size: 11px; }
+#linkedin-logic-solver pre { max-height: 250px; overflow: auto; white-space: pre-wrap; overflow-wrap: anywhere; }

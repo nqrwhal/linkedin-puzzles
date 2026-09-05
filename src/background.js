@@ -2,8 +2,6 @@
 
 const attachedTabs = new Set();
 const attachPromises = new Map();
-const inputTabs = new Set();
-const inputTimers = new Map();
 const captureTabs = new Set();
 const captureTimers = new Map();
 const puzzleRoutes = new Map();
@@ -22,19 +20,47 @@ const MAX_PERSISTED_SOURCE_CHARS = 6 * 1024 * 1024;
 const DEFAULT_GAME_QUERY_ID = "voyagerIdentityDashGames.f8508525e36bee5f9a5ab6b637854d87";
 let observedGameQueryId = null;
 
-// Full-session request recording: every LinkedIn request seen on the
-// debugger session, dumped on demand for offline protocol analysis. Logs are
-// mirrored into session storage so a service-worker restart mid-run does not
-// silently drop a game's captured save.
+// Retain only game-save protocol evidence, without request headers or cookies.
 const sessionCapture = new Map();
+const pendingSaveResponses = new Map();
+const saveContracts = new Map();
 const previousCapture = new Map();
 const CAPTURE_LOG_PREFIX = "llsReqLog";
 const PREVIOUS_CAPTURE_PREFIX = "llsReqLogPrev";
 
+function redactCapture(text) {
+  return String(text || "")
+    .replace(/urn:li:fsd_game:\([^,]+,/g, "urn:li:fsd_game:(<member>,")
+    .replace(/ajax:\d+/g, "<csrf>")
+    .replace(/("(?:[^"]*(?:token|cookie|authorization|password|secret)[^"]*)"\s*:\s*)"[^"]*"/gi, '$1"<redacted>"');
+}
+
+function safeCapturedRequests(log) {
+  return log.filter((entry) => /gameStoredRecord|updateGameState|fsd_game/.test(entry.postData || "")
+    || entry.method === "SAVE-RESPONSE").map((entry) => ({
+      ...entry, postData: redactCapture(entry.postData),
+    }));
+}
+
+function capturePageGame(gameName) {
+  const selectors = { queens: "#queens-game-board", tango: "#tango-cell-0", zip: "[data-cell-idx]", patches: "[data-cell-idx]", wend: "[data-game-content-root]" };
+  if (!selectors[gameName]) return null;
+  const board = document.querySelector(selectors[gameName]);
+  if (!board) return null;
+  let fiber = board[Object.keys(board).find((key) => key.startsWith("__reactFiber$"))];
+  for (let depth = 0; fiber && depth < 20; depth += 1, fiber = fiber.return) {
+    const game = fiber.memoizedProps?.game;
+    if (game?.gameUrn && game?.puzzle) {
+      return JSON.parse(JSON.stringify(game, (_key, value) => typeof value === "bigint" ? String(value) : value));
+    }
+  }
+  return null;
+}
+
 function recordSessionRequest(tabId, entry) {
   const log = sessionCapture.get(tabId) || [];
-  log.push(entry);
-  if (log.length > 800) log.shift();
+  log.push({ capturedAt: Date.now(), ...entry });
+  while (log.length > 800 || JSON.stringify(log).length > 1024 * 1024) log.shift();
   sessionCapture.set(tabId, log);
   chrome.storage.session?.set({ [`${CAPTURE_LOG_PREFIX}${tabId}`]: log }).catch(() => {
     // Losing the mirror only costs captures across a worker restart.
@@ -67,7 +93,7 @@ async function capturedRequests(tabId, { includePrevious = false } = {}) {
       log = [];
     }
   }
-  if (!includePrevious) return log;
+  if (!includePrevious) return safeCapturedRequests(log);
   let previous = previousCapture.get(tabId);
   if (!previous) {
     try {
@@ -78,7 +104,7 @@ async function capturedRequests(tabId, { includePrevious = false } = {}) {
       previous = [];
     }
   }
-  return [...previous, ...log];
+  return safeCapturedRequests([...previous, ...log]);
 }
 
 function debug(...args) {
@@ -136,6 +162,7 @@ function syncPuzzleRoute(tabId, url) {
   if (!route) return;
   const previous = puzzleRoutes.get(tabId);
   if (previous && previous !== route) {
+    saveContracts.delete(tabId);
     puzzleSources.delete(tabId);
     pendingPuzzleResponses.delete(tabId);
     pageScanTimes.delete(tabId);
@@ -256,48 +283,8 @@ async function ensureAttached(tabId) {
   await attachPromises.get(tabId);
 }
 
-function inputInterval(value) {
-  const number = Number(value);
-  return Number.isFinite(number) ? Math.max(0, Math.min(100, number)) : 0;
-}
-
-function waitForInput(ms) {
-  return ms > 0 ? new Promise((resolve) => setTimeout(resolve, ms)) : Promise.resolve();
-}
-
-async function dispatchMouseEvent(tabId, event) {
-  const { eventType, x, y, button = "none", buttons = 0, clickCount = 0 } = event || {};
-  await chrome.debugger.sendCommand({ tabId }, "Input.dispatchMouseEvent", {
-    type: eventType,
-    x,
-    y,
-    button,
-    buttons,
-    clickCount,
-  });
-}
-
-async function dispatchKey(tabId, keyEvent) {
-  const { key, code, keyCode = 0, modifiers = 0 } = keyEvent || {};
-  const common = {
-    key,
-    code,
-    modifiers,
-    windowsVirtualKeyCode: keyCode,
-    nativeVirtualKeyCode: keyCode,
-  };
-  await chrome.debugger.sendCommand({ tabId }, "Input.dispatchKeyEvent", {
-    type: "rawKeyDown",
-    ...common,
-  });
-  await chrome.debugger.sendCommand({ tabId }, "Input.dispatchKeyEvent", {
-    type: "keyUp",
-    ...common,
-  });
-}
-
 async function detachIfIdle(tabId) {
-  if (inputTabs.has(tabId) || captureTabs.has(tabId)) return;
+  if (captureTabs.has(tabId)) return;
   if (!attachedTabs.has(tabId)) return;
   attachedTabs.delete(tabId);
   try {
@@ -308,9 +295,7 @@ async function detachIfIdle(tabId) {
 }
 
 async function forceDetach(tabId) {
-  inputTabs.delete(tabId);
   captureTabs.delete(tabId);
-  clearTimer(inputTimers, tabId);
   clearTimer(captureTimers, tabId);
   pendingPuzzleResponses.delete(tabId);
   try {
@@ -319,15 +304,6 @@ async function forceDetach(tabId) {
     // A failed attachment needs no matching detach.
   }
   await detachIfIdle(tabId);
-}
-
-function armInputSafety(tabId) {
-  clearTimer(inputTimers, tabId);
-  inputTimers.set(tabId, setTimeout(() => {
-    inputTabs.delete(tabId);
-    inputTimers.delete(tabId);
-    void detachIfIdle(tabId);
-  }, 30000));
 }
 
 function armCaptureStop(tabId) {
@@ -360,6 +336,7 @@ async function primeCapture(tabId, url) {
   captureTabs.add(tabId);
   try {
     await chrome.debugger.sendCommand({ tabId }, "Network.enable", {
+      maxPostDataSize: 64 * 1024,
       maxResourceBufferSize: 4 * 1024 * 1024,
       maxTotalBufferSize: 8 * 1024 * 1024,
     });
@@ -403,6 +380,13 @@ async function handleMessage(message, sender) {
 
   if (message?.type === "lls-debug-requests") {
     return { ok: true, requests: await capturedRequests(tabId, { includePrevious: Boolean(message.all) }) };
+  }
+
+  if (message?.type === "lls-request-context") {
+    const results = await chrome.scripting.executeScript({
+      target: { tabId, frameIds: [sender.frameId || 0] }, world: "MAIN", func: capturePageGame, args: [puzzleRoute(sender.url)],
+    });
+    return { ok: true, game: results?.[0]?.result, template: saveContracts.get(tabId) || null };
   }
 
   if (message?.type === "lls-capture-start") {
@@ -458,84 +442,6 @@ async function handleMessage(message, sender) {
     return { ok: true };
   }
 
-  if (message?.type === "lls-input-start") {
-    await ensureAttached(tabId);
-    inputTabs.add(tabId);
-    armInputSafety(tabId);
-    // Watching requests during trusted input also lets logic-game saves
-    // teach the replay template, which word-game capture already covers.
-    try {
-      await chrome.debugger.sendCommand({ tabId }, "Network.enable", {
-        maxResourceBufferSize: 4 * 1024 * 1024,
-        maxTotalBufferSize: 8 * 1024 * 1024,
-      });
-    } catch {
-      // Input still works without request visibility.
-    }
-    return { ok: true };
-  }
-
-  if (message?.type === "lls-input-stop") {
-    inputTabs.delete(tabId);
-    clearTimer(inputTimers, tabId);
-    // Queens, Tango, and Zip debounce their END_SOLVED save more than 30s
-    // past the last input; detaching at 30s silently dropped those saves from
-    // the recorder. Two minutes covers every observed save cadence while the
-    // input-safety timer still bounds a solve that never reports completion.
-    setTimeout(() => void detachIfIdle(tabId), 120000);
-    return { ok: true };
-  }
-
-  if (message?.type === "lls-input-events") {
-    const events = Array.isArray(message.events) ? message.events : [];
-    if (!events.length || events.length > 500) throw new Error("Chrome received an invalid puzzle mouse sequence.");
-    await ensureAttached(tabId);
-    inputTabs.add(tabId);
-    armInputSafety(tabId);
-    const intervalMs = inputInterval(message.intervalMs);
-    for (let index = 0; index < events.length; index += 1) {
-      await dispatchMouseEvent(tabId, events[index]);
-      if (index < events.length - 1) await waitForInput(intervalMs);
-    }
-    armInputSafety(tabId);
-    return { ok: true };
-  }
-
-  if (message?.type === "lls-input-text") {
-    await ensureAttached(tabId);
-    inputTabs.add(tabId);
-    armInputSafety(tabId);
-    await chrome.debugger.sendCommand({ tabId }, "Input.insertText", {
-      text: String(message.text || ""),
-    });
-    armInputSafety(tabId);
-    return { ok: true };
-  }
-
-  if (message?.type === "lls-input-key") {
-    await ensureAttached(tabId);
-    inputTabs.add(tabId);
-    armInputSafety(tabId);
-    await dispatchKey(tabId, message);
-    armInputSafety(tabId);
-    return { ok: true };
-  }
-
-  if (message?.type === "lls-input-keys") {
-    const keys = Array.isArray(message.keys) ? message.keys : [];
-    if (!keys.length || keys.length > 500) throw new Error("Chrome received an invalid puzzle key sequence.");
-    await ensureAttached(tabId);
-    inputTabs.add(tabId);
-    armInputSafety(tabId);
-    const intervalMs = inputInterval(message.intervalMs);
-    for (let index = 0; index < keys.length; index += 1) {
-      await dispatchKey(tabId, keys[index]);
-      if (index < keys.length - 1) await waitForInput(intervalMs);
-    }
-    armInputSafety(tabId);
-    return { ok: true };
-  }
-
   return { ok: false };
 }
 
@@ -551,9 +457,7 @@ chrome.debugger.onDetach.addListener((source) => {
   if (Number.isInteger(source.tabId)) {
     attachedTabs.delete(source.tabId);
     attachPromises.delete(source.tabId);
-    inputTabs.delete(source.tabId);
     captureTabs.delete(source.tabId);
-    clearTimer(inputTimers, source.tabId);
     clearTimer(captureTimers, source.tabId);
     pendingPuzzleResponses.delete(source.tabId);
   }
@@ -563,17 +467,27 @@ chrome.debugger.onEvent.addListener(async (source, method, params) => {
   const tabId = source.tabId;
   if (!Number.isInteger(tabId)) return;
   // Full-session request recording plus query-id observation run on any
-  // Network events (word-game capture or trusted-input sessions alike).
+  // Capture puzzle data and native save contracts from game traffic.
   if (method === "Network.requestWillBeSent") {
     const req = params?.request || {};
-    if (/linkedin\.com/.test(req.url || "") && !/\.(js|css|png|svg|gif|ico|woff2?)/i.test(req.url)) {
-      // Flagship rsc-action bodies carry the sdui stack's updateGameState
-      // saves; their states array sits past 4k characters.
-      const isRscAction = /\/flagship-web\/rsc-action\//.test(req.url || "");
+    if (/^https:\/\/www\.linkedin\.com\//.test(req.url || "")
+      && /gameStoredRecord|updateGameState/.test(req.postData || "")) {
+      if (req.postData.includes("updateGameState")) {
+        try {
+          const body = JSON.parse(req.postData);
+          if (body.requestId === "updateGameState") saveContracts.set(tabId, body);
+        } catch {
+          // Malformed requests are diagnostic evidence, never replay templates.
+        }
+      }
+      const url = new URL(req.url);
+      const queryId = url.searchParams.get("queryId");
+      const endpoint = url.origin + url.pathname + (queryId ? `?queryId=${encodeURIComponent(queryId)}` : "");
+      if (!pendingSaveResponses.has(tabId)) pendingSaveResponses.set(tabId, new Set());
+      pendingSaveResponses.get(tabId).add(params.requestId);
       recordSessionRequest(tabId, {
-        method: req.method,
-        url: String(req.url).slice(0, 400),
-        postData: req.postData ? String(req.postData).slice(0, isRscAction ? 20000 : 4000) : null,
+        method: req.method, url: endpoint, requestId: params.requestId,
+        postData: redactCapture(req.postData).slice(0, 30000),
       });
     }
     // The save mutation's query id is the only learned fact replays need;
@@ -587,25 +501,35 @@ chrome.debugger.onEvent.addListener(async (source, method, params) => {
     }
   }
 
-  // Queens, Tango, Zip, and Patches never issue an HTTP save; their state
-  // rides the realtime socket opened at page load. Record the socket's
-  // lifecycle and game-bearing frames for protocol analysis.
-  if (method === "Network.webSocketCreated") {
-    recordSessionRequest(tabId, {
-      method: "WS-OPEN",
-      url: String(params?.url || "").slice(0, 400),
-      postData: null,
-    });
+  if (method === "Network.webSocketFrameSent" || method === "Network.webSocketFrameReceived") {
+    const payload = params.response?.payloadData || "";
+    if (/gameStoredRecord|updateGameState|fsd_game/.test(payload)) {
+      recordSessionRequest(tabId, { method, requestId: params.requestId,
+        postData: redactCapture(payload).slice(0, 30000) });
+    }
   }
-  if (method === "Network.webSocketFrame") {
-    const frame = params?.response || {};
-    const payload = String(frame.payloadData || "");
-    if (/game|fsd_game|storedRecord|state|queens|tango|zip|patch|solve|board/i.test(payload)) {
-      recordSessionRequest(tabId, {
-        method: `WS-FRAME-${frame.opcode}`,
-        url: `t=${Math.round(frame.time * 1000)}`,
-        postData: payload.slice(0, 4000),
-      });
+
+  const saves = pendingSaveResponses.get(tabId);
+  if (saves?.has(params.requestId)) {
+    if (method === "Network.responseReceived") {
+      recordSessionRequest(tabId, { method: "SAVE-RESPONSE", requestId: params.requestId,
+        status: params.response?.status, postData: "" });
+    }
+    if (method === "Network.loadingFinished") {
+      saves.delete(params.requestId);
+      try {
+        const response = await chrome.debugger.sendCommand({ tabId }, "Network.getResponseBody", { requestId: params.requestId });
+        recordSessionRequest(tabId, { method: "SAVE-RESPONSE", requestId: params.requestId,
+          postData: redactCapture(response.base64Encoded
+            ? new TextDecoder().decode(Uint8Array.from(atob(response.body), (char) => char.charCodeAt(0)))
+            : response.body).slice(0, 30000) });
+      } catch {
+        recordSessionRequest(tabId, { method: "SAVE-RESPONSE", requestId: params.requestId, postData: "<response body unavailable>" });
+      }
+    }
+    if (method === "Network.loadingFailed") {
+      saves.delete(params.requestId);
+      recordSessionRequest(tabId, { method: "SAVE-RESPONSE", requestId: params.requestId, postData: params.errorText || "Network failure" });
     }
   }
 
@@ -647,6 +571,8 @@ chrome.debugger.onEvent.addListener(async (source, method, params) => {
 });
 
 chrome.tabs?.onRemoved.addListener((tabId) => {
+  saveContracts.delete(tabId);
+  pendingSaveResponses.delete(tabId);
   puzzleRoutes.delete(tabId);
   pageScanTimes.delete(tabId);
   puzzleSources.delete(tabId);
@@ -661,6 +587,7 @@ chrome.tabs?.onRemoved.addListener((tabId) => {
 chrome.tabs?.onUpdated.addListener((tabId, changeInfo, tab) => {
   const url = changeInfo.url || tab?.url || "";
   if (changeInfo.status === "loading") {
+    saveContracts.delete(tabId);
     puzzleSources.delete(tabId);
     pendingPuzzleResponses.delete(tabId);
     pageScanTimes.delete(tabId);
@@ -670,18 +597,20 @@ chrome.tabs?.onUpdated.addListener((tabId, changeInfo, tab) => {
   if (!changeInfo.url && changeInfo.status !== "loading") return;
   if (/^https:\/\/www\.linkedin\.com\/games\//.test(url)) {
     syncPuzzleRoute(tabId, url);
-    if (/^https:\/\/www\.linkedin\.com\/games\/(?:view\/)?(?:pinpoint|crossclimb|wend)(?:\/|[?#]|$)/.test(url)) {
-      // Keep network capture attached for the whole word-game visit: the
+    if (/^https:\/\/www\.linkedin\.com\/games\/(?:view\/)?(?:pinpoint|crossclimb|wend|queens|tango|zip|patches|mini-sudoku)(?:\/|[?#]|$)/.test(url)) {
+      // Keep network capture attached for the game visit: the
       // one-shot puzzle response can arrive at any navigation on the route.
       void primeCapture(tabId, url).catch(() => {
         // React props and bootstrap scripts remain available as fallbacks.
       });
       return;
     }
-    // Logic games never need captured responses, so release the debugger.
+    // The games hub needs no capture connection.
     stopCapture(tabId);
     return;
   }
+  saveContracts.delete(tabId);
+  pendingSaveResponses.delete(tabId);
   puzzleRoutes.delete(tabId);
   pageScanTimes.delete(tabId);
   puzzleSources.delete(tabId);

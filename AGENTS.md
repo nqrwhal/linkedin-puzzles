@@ -7,3 +7,11 @@
 - Never include unrelated user changes in the commit. If the working tree is mixed, stage explicit task files and preserve everything else.
 - If validation fails, required work remains, or the push is blocked, do not claim completion. Keep the work intact and report the exact blocker.
 - Skip automatic commit and push for read-only analysis, explanations, reviews, or diagnoses that do not change project files, and follow any explicit user instruction not to publish changes.
+
+
+## Product direction
+
+- The goal is request-based completion of every supported game, replacing fragile mouse, keyboard, and drag submission.
+- Local solving may still compute the completed state, but a request-path test must never fall back to UI input.
+- Keep game-specific protocol capture until each save contract is understood and verified; it is migration tooling, not unused diagnostics.
+- Verify a request solve against an initially unsolved signed-in board and a reload that shows persisted completion. A 200 response or the extension's own success message is not sufficient.

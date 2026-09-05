@@ -1,82 +1,33 @@
 # LinkedIn Puzzle Solver
 
-A local Chrome extension that recognizes LinkedIn's current logic and word games and adds a compact solver control on the right side of the page.
+A local Chrome extension that reads LinkedIn's delivered puzzle solutions and submits completed game states by request. It supports Pinpoint, Crossclimb, Mini Sudoku, Queens, Tango, Zip, Patches, and Wend. It never falls back to clicking cells, typing answers, or dragging paths.
 
-Supported games:
+## Install and use
 
-- Queens
-- Tango
-- Zip
-- Mini Sudoku
-- Patches
-- Pinpoint
-- Crossclimb
-- Wend
+1. Open chrome://extensions, enable Developer mode, and load this folder with **Load unpacked**.
+2. Sign in to LinkedIn and open the game board.
+3. Click **Solve by request**. The extension submits the save, reloads the page, and checks for LinkedIn's completed-board controls before reporting success.
 
-## Install
+After an update, reload the extension and the game tab. The panel shows the running version. Guest boards have no member save record, so request completion requires a signed-in session. Incognito works when the extension is enabled there and LinkedIn is signed in.
 
-1. Open `chrome://extensions` in Chrome.
-2. Turn on **Developer mode**.
-3. Choose **Load unpacked**.
-4. Select this project folder.
-5. Open any supported game under `https://www.linkedin.com/games/` and use the solver card on the right.
+## Request paths
 
-## Usage
+Pinpoint, Crossclimb, and Mini Sudoku use Voyager's game-save mutation with the exact game URN supplied by the page, including negative tutorial puzzle ids. A successful response must identify that same resource.
 
-1. Open a supported LinkedIn game while signed in.
-2. Wait for the **Puzzle Solver** card to say the board is recognized.
-3. Click **Solve puzzle** and keep the game tab open until the card says **Solved!**.
+Queens, Tango, Zip, Patches, and Wend use the page's SDUI updateGameState contract. The extension captures the current document's native save, reads its delivered solution from React props, and changes the completion and board-state bindings. It preserves the remaining contract fields and uses milliseconds for SDUI elapsed time. Missing contracts or data stop the solve; no input fallback is attempted.
 
-The solver follows LinkedIn's in-page navigation, so moving between games from the games hub or a game's sidebar re-detects the new board and its puzzle data without reloading the tab. If a board is still mounting, solvers wait a few seconds for it before reporting that it is not visible.
+The debugger permission reads game traffic, and scripting reads page-owned puzzle objects. No mouse or keyboard input is dispatched. Capture is bounded to fifteen minutes and released when leaving game pages. The extension only sends saves to LinkedIn.
 
-Chrome shows a debugging banner while the extension reads word-game data or sends trusted puzzle input. Word-game pages keep that read connection open for the whole visit because LinkedIn delivers a puzzle's answers exactly once per navigation and never renders them into the page; it detaches on other pages. If the solver card does not appear after updating the extension, reload both the extension on `chrome://extensions` and the game tab — the card's eyebrow shows the running version so you can confirm the update loaded.
+**Game capture** exposes local diagnostic records. Request headers are not logged; token fields and game-URN member components are redacted. Captures may still contain game-specific account identifiers, so review them before sharing. Captured replay contracts remain in memory for the current document and are cleared on navigation.
 
-Games are also playable while signed out — an incognito window without a LinkedIn session gets fresh guest boards, and the solver clicks through each game's launch screen ("Start game", "Solve now") automatically. Every game except Wend solves as a guest: LinkedIn delivers Wend's answer paths only to signed-in sessions, so guest Wend boards have no solvable data and the solver says so. Guest completions stay client-side (LinkedIn does not save them), so single-request solves and save templates apply to signed-in sessions.
+## Validation status
 
-For incognito play, enable **Allow in Incognito** on the extension's Details page. A signed-in incognito window uses the same game layout as a normal window, so single-request solves work there too; the solver derives its request token from the current window's own session cookie, so a template learned in a normal window stays valid in incognito. For word games, the extension can read the puzzle object from LinkedIn's rendered page state when an incognito page does not expose the answer data in HTML or the network response.
+During development, request prototypes completed initially unsolved boards for all eight games on a fresh signed-in account, and reloading each board showed LinkedIn's completed state. Several were onboarding/tutorial puzzles. Those protocol tests do not substitute for testing the integrated extension or regular daily boards.
 
-To keep browsing during a solve, put the puzzle in a separate Chrome window and leave that window open; a tab group only organizes tabs and does not isolate foreground focus or background throttling. After pressing **Solve puzzle**, you can switch to your normal Chrome window. The solver uses tab-targeted trusted input and mutation-driven board checks so it does not depend on rapid timers or animation frames in the unfocused or occluded puzzle window. Solving also fails if DevTools is open on the puzzle tab, because Chrome allows only one debugger at a time.
-
-The extension does not make its own network requests, collect data, or send puzzle contents anywhere. It keeps only matching puzzle data from LinkedIn's current page in memory and in Chrome's session storage for the background worker. Chrome's `debugger` permission is used to read that already-delivered response and create trusted mouse and keyboard input; capture stays attached on word-game tabs for up to fifteen minutes and solve input has a 30-second safety timeout.
-
-## How it works
-
-The extension reads the same accessibility labels and cell metadata that LinkedIn exposes to the page, solves the board locally, and performs the normal cell interactions:
-
-- Queens: region-aware backtracking
-- Tango: binary constraint propagation and search
-- Zip: wall-aware ordered Hamiltonian-path search with connectivity pruning
-- Mini Sudoku: current-grid detection and region-aware Sudoku search
-- Patches: rectangle enumeration and exact cover
-- Pinpoint: accepted category extraction from the page's bootstrap data, submitted by replaying LinkedIn's own single save request when its shape is known
-- Crossclimb: visible clue-to-row matching, ladder ordering, and final-pair entry, with a single-request path when the save shape is known
-- Wend: exact answer paths from the page's delivered grid data
-
-Pinpoint and Crossclimb solve with a single request each: the page's own embedded data declares the exact game URN (member, game id, and current day) for the board it is serving, and the solver replays LinkedIn's own save mutation with the solved state, deriving its CSRF token from the current session. Nothing is learned or stored — every fact comes from the page being solved. Any missing fact, rejected request, or in-envelope mutation error falls straight back to the verified UI solver, so a solve never depends on the private endpoint alone.
-
-Word-game parsers preserve valid embedded JSON before peeling wrapper escaping, so quoted clue and answer text cannot corrupt otherwise complete puzzle data.
-
-Input is paced where LinkedIn can safely consume it: Zip reads rendered wall geometry and connects the solved route one verified cell at a time; Wend dispatches the board's touch contract locally and confirms every letter cell locked, retrying each word with progressively slower gestures; Patches uses compact trusted drag sequences with mutation-driven settling; and Crossclimb advances after React has rendered each letter or row move. Every signed-in solve except Pinpoint holds only its final move until a two-second safety floor passes and then watches briefly for a late save rejection before reporting success; Pinpoint submits its single guess immediately, and all other input runs as fast as the board confirms it, so a solve finishes in about two to three seconds.
-
-During a solve, the extension panel is removed from pointer hit testing and a transparent shield swallows any physical mouse activity aimed at it, so a cursor parked over the Solve button cannot interrupt trusted input or leak stray moves, hovers, and clicks into LinkedIn's handlers. Board waits use mutation signals with a low-frequency fallback and lag-tolerant deadlines; Patches also verifies each rendered rectangle and retries once before continuing.
+On September 5, 2026, the installed v0.7.0 extension passed the same end-to-end check for all eight games in signed-in Chrome. Each board started unsolved; clicking **Solve by request** submitted the save and automatically reloaded the page. Every reloaded board showed LinkedIn's **See results** control, and the extension reported verified completion. No board clicks, answer typing, or path dragging were used in these integrated tests. Mini Sudoku was daily puzzle #390; this account also received onboarding boards, so this does not establish coverage of every daily puzzle variant.
 
 ## Development
 
-Run the pure solver tests with:
+Run `npm test` for parser, request-contract, response-validation, and runtime checks. After editing the unpacked extension, reload it in Chrome and reload the game.
 
-```bash
-npm test
-```
-
-After editing a loaded unpacked extension, click its reload icon on `chrome://extensions`, then reload the puzzle page.
-
-### Releasing
-
-CI builds the extension zip on every push, and publishing a release is tag-driven: bump the version in `manifest.json` and `package.json`, commit, then
-
-```bash
-git tag vX.Y.Z
-git push origin main --tags
-```
-
-The Release workflow runs the tests, refuses a tag that does not match `manifest.json`'s version, builds `linkedin-puzzle-solver-X.Y.Z.zip`, and publishes the GitHub release with it.
+CI builds the extension zip on pushes. For a release, bump manifest.json and package.json together, commit, and push a matching vX.Y.Z tag. The release workflow checks the version and tests before publishing.

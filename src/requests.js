@@ -87,7 +87,7 @@
       if (Number.isFinite(elapsedMs)) {
         const time = values.get("gameBoardTimeElapsed");
         if (!time?.value || time.value.type !== "bigint") throw new Error("Missing elapsed-time binding.");
-        time.value.value = String(Math.max(Number(time.value.value) || 0, Math.round(elapsedMs)));
+        time.value.value = String(Math.max(2000, Math.round(elapsedMs)));
       }
     }
     return body;

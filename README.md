@@ -26,6 +26,8 @@ During development, request prototypes completed initially unsolved boards for a
 
 On September 5, 2026, the installed v0.7.0 extension passed the same end-to-end check for all eight games in signed-in Chrome. Each board started unsolved; clicking **Solve by request** submitted the save and automatically reloaded the page. Every reloaded board showed LinkedIn's **See results** control, and the extension reported verified completion. No board clicks, answer typing, or path dragging were used in these integrated tests. Mini Sudoku was daily puzzle #390; this account also received onboarding boards, so this does not establish coverage of every daily puzzle variant.
 
+The same day's follow-up on an established account verified the current live boards. v0.7.1 saved Tango, Zip, Patches, Wend, Mini Sudoku #390, and Crossclimb #858 at **0:02**, with completion confirmed after reload. Pinpoint #858 completed in one request; it scores guesses rather than time. Queens completed under v0.7.0 at 0:14, exposing an elapsed-time bug: SDUI saves retained time already accumulated on the board. v0.7.1 uses the request solve's elapsed time instead. Queens' completed daily board was not retested from an unsolved state after that fix. Observed click-through-reload checks took roughly 3.4–3.6 seconds for several timed games, so a two-second recorded score is not a guarantee of a two-second browser round trip.
+
 ## Development
 
 Run `npm test` for parser, request-contract, response-validation, and runtime checks. After editing the unpacked extension, reload it in Chrome and reload the game.

@@ -50,7 +50,7 @@ test("SDUI completion requires the server's results navigation action", () => {
   assert.throws(() => sduiResponse("invalid"), /unrecognized/);
 });
 
-test("Tango preserves millisecond elapsed time and converts delivered cell enums", () => {
+test("Tango records request solve time instead of previously accumulated board time", () => {
   const { tangoSave } = require("../src/requests.js");
   const tango = { gameUrn: { gameTypeId: "5", puzzleId: "-99992" },
     puzzle: { lotkaGamePuzzle: { gridSize: 2, solution: ["LotkaCellValue_ZERO", "LotkaCellValue_ONE", "LotkaCellValue_ONE", "LotkaCellValue_ZERO"] } } };
@@ -58,11 +58,11 @@ test("Tango preserves millisecond elapsed time and converts delivered cell enums
   template.requestedArguments.payload.gameTypeId = "5";
   for (const states of [template.states, template.requestedArguments.states]) {
     states[2].key = "tangoBoardStateBinding";
-    states.push({ key: "gameBoardTimeElapsed", value: { type: "bigint", value: "0" } });
+    states.push({ key: "gameBoardTimeElapsed", value: { type: "bigint", value: "14625" } });
   }
-  const result = tangoSave(tango, template, 13895);
+  const result = tangoSave(tango, template, 2004);
   for (const states of [result.states, result.requestedArguments.states]) {
-    assert.equal(states.find(s => s.key === "gameBoardTimeElapsed").value.value, "13895");
+    assert.equal(states.find(s => s.key === "gameBoardTimeElapsed").value.value, "2004");
     assert.deepEqual(states.find(s => s.key === "tangoBoardStateBinding").value, ["ZERO", "ONE", "ONE", "ZERO"]);
   }
 });

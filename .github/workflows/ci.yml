@@ -31,6 +31,28 @@ jobs:
           name: linkedin-puzzle-solver
           path: dist/*.zip
 
+  extension-e2e:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: npm
+          cache-dependency-path: e2e/package-lock.json
+      - run: npm ci --prefix e2e
+      - run: npm exec --prefix e2e -- playwright-core install --with-deps chromium
+      - name: Test actual extension against offline request contracts
+        run: npm run test:e2e
+        env:
+          E2E_TELEMETRY_DISABLED: '1'
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: extension-e2e-results
+          path: e2e/.e2e/
+          include-hidden-files: true
+
   headless-service-smoke:
     runs-on: ubuntu-latest
     steps:

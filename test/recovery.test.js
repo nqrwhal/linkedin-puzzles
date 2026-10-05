@@ -15,15 +15,15 @@ function page(storage, { template = null, game = {}, path = '/games/wend/', unre
     reload() { state.reloads++; } };
   let serviceMessage;
   const context = vm.createContext({
-    window: {}, location, Date, AbortSignal,
+    window: {}, location, Date, AbortSignal, getComputedStyle: () => ({ visibility: 'visible' }),
     sessionStorage: { getItem: key => storage.get(key) || null,
       setItem: (key, value) => storage.set(key, value), removeItem: key => storage.delete(key) },
     document: { cookie: 'JSESSIONID="test"', createElement: () => panel,
       documentElement: { appendChild() { panel.isConnected = true; } }, querySelector: () => null,
       querySelectorAll: selector => embedded
-        ? (selector === 'iframe' ? [{ contentDocument: { querySelectorAll: inner => inner === 'a,button' && state.won
-          ? [{ textContent: 'See results', closest: () => null }] : [] } }] : [])
-        : selector === 'a,button' && state.won ? [{ textContent: 'See results', closest: () => null }] : [] },
+        ? (selector === 'iframe' ? [{ getClientRects: () => [1], contentDocument: { querySelectorAll: inner => inner === 'a,button' && state.won
+          ? [{ textContent: 'See results', closest: () => null, getClientRects: () => [1] }] : [] } }] : [])
+        : selector === 'a,button' && state.won ? [{ textContent: 'See results', closest: () => null, getClientRects: () => [1] }] : [] },
     chrome: { runtime: { id: 'test-extension', onMessage: { addListener(fn) { serviceMessage = fn; } }, getManifest: () => ({ version: 'test' }),
       sendMessage: async ({ type }) => unresponsive ? new Promise(() => {}) : type === 'lls-request-context'
         ? { ok: true, game, template } : { ok: true } } },

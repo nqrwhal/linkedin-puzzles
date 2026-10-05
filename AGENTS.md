@@ -15,3 +15,8 @@
 - Local solving may still compute the completed state, but a request-path test must never fall back to UI input.
 - Keep game-specific protocol capture until each save contract is understood and verified; it is migration tooling, not unused diagnostics.
 - Verify a request solve against an initially unsolved signed-in board and a reload that shows persisted completion. A 200 response or the extension's own success message is not sufficient.
+
+## Browser regression checks
+
+- Preserve the Node tests and headless-service smoke when extending coverage. `npm test` runs the Node suite; `npm ci --prefix e2e`, `npm --prefix e2e run install:browser`, and `npm run test:e2e` run the offline tester-army suite with the actual unpacked extension.
+- Browser fixtures block outbound traffic and use disposable profiles. Do not turn a fixture pass into a claim about live authenticated boards; live acceptance follows the product-direction rule above.

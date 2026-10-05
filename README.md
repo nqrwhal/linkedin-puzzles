@@ -40,4 +40,20 @@ The same day's follow-up on an established account verified the current live boa
 
 Run `npm test` for parser, request-contract, response-validation, and runtime checks. After editing the unpacked extension, reload it in Chrome and reload the game.
 
+The browser suite uses [tester-army/e2e](https://github.com/tester-army/e2e), pinned to `e2e` 0.17.0 and `@e2e-dev/web` 0.12.0, with Playwright 1.63.0. It runs the actual manifest, content scripts, and MV3 service worker in disposable Chromium profiles, using the framework's public browser-provider API. Install with Node 22.12+ (CI uses Node 24):
+
+```sh
+npm ci --prefix e2e
+npm --prefix e2e run install:browser
+npm run test:e2e
+```
+
+On Linux, install Chromium's system dependencies with `npm exec --prefix e2e -- playwright-core install --with-deps chromium`. Unsupported Ubuntu releases may require `PLAYWRIGHT_HOST_PLATFORM_OVERRIDE=ubuntu24.04-x64`. Reports, JUnit, and traces are written under `e2e/.e2e/`; CI uploads them separately from the extension zip. Tests use deterministic browser actions and assertions, so no model account or API key is required. The suite caps workers at two and creates no HTTP server.
+
+Offline browser coverage includes panel request saves for all eight games, native SDUI contract capture, elapsed-time units and retained bindings, initially unsolved fixture boards followed by completion after automatic and explicit reloads, completed-board skips, guest rejection, HTTP failures, mismatched responses, stale puzzle contracts, missing-contract recovery, unpersisted saves, diagnostic redaction, worker restart, and the service's real extension-message entry point. A blocked default network route ensures these tests cannot send a save to LinkedIn. This extension has no popup or options page; its user entry point is the panel on the game page.
+
+These fixtures validate extension wiring and request contracts, including reduced puzzle payloads; they do not validate current LinkedIn daily puzzle variants or signed-in live completion. Live acceptance still requires an initially unsolved authenticated board and LinkedIn completion after fresh navigation. No account, daily board, deployed service, or live browser profile is used by this suite.
+
+v0.8.1 fixes a browser-tested completion bug: an invisible **See results** control could make the extension skip an unsolved board. Completion controls and embedded game documents now must be visible.
+
 CI builds the extension zip on pushes. For a release, bump manifest.json and package.json together, commit, and push a matching vX.Y.Z tag. The release workflow checks the version and tests before publishing.

@@ -1,8 +1,9 @@
 {
   "name": "linkedin-logic-solver",
-  "version": "0.8.0",
+  "version": "0.8.1",
   "private": true,
   "scripts": {
-    "test": "node --test"
+    "test": "node --test test/*.test.js",
+    "test:e2e": "npm --prefix e2e test"
   }
 }

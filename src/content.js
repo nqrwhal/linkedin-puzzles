@@ -26,6 +26,7 @@
     const documents = [document];
     for (let index = 0; index < documents.length && index < 8; index++) {
       for (const frame of documents[index].querySelectorAll("iframe")) {
+        if (!visible(frame)) continue;
         try {
           const child = frame.contentDocument;
           if (child && !documents.includes(child)) documents.push(child);
@@ -35,10 +36,14 @@
     return documents;
   }
 
+  function visible(el) {
+    return !!(el.getClientRects().length && getComputedStyle(el).visibility !== "hidden");
+  }
+
   function completed() {
     return /\/results\/?$/.test(location.pathname)
       || gameDocuments().some(doc => [...doc.querySelectorAll("a,button")].some((el) =>
-        !el.closest("#linkedin-logic-solver") && (el.textContent || "").trim() === "See results"));
+        !el.closest("#linkedin-logic-solver") && visible(el) && (el.textContent || "").trim() === "See results"));
   }
 
   function setStatus(text, state = "idle") {

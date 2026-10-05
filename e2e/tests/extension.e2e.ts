@@ -80,8 +80,8 @@ test('changed native hooks fail closed after exactly one recovery reload', async
   expect(await browser.evaluate(() => sessionStorage.getItem('fixtureBoardInput'))).toBe(null);
 });
 
-test('hidden completed control does not skip an unsolved board', async ({ browser }) => {
-  const f = await fixture(browser, 'pinpoint', { hiddenResults: true });
+for (const hidden of ['control', 'frame'] as const) test(`hidden completed ${hidden} does not skip an unsolved board`, async ({ browser }) => {
+  const f = await fixture(browser, 'pinpoint', { hiddenResults: hidden === 'control', hiddenFrame: hidden === 'frame' });
   await browser.goto('/games/pinpoint/');
   await expect(browser.locator('.lls__status')).toHaveText('Ready to solve by request.');
   await browser.locator('.lls__solve').click();

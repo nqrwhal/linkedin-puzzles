@@ -37,7 +37,7 @@ function template(game: Game) {
 }
 
 export async function fixture(browser: Browser, game: Game, options: {
-  guest?: boolean; hiddenResults?: boolean; brokenNative?: boolean; staleContract?: boolean;
+  guest?: boolean; hiddenResults?: boolean; hiddenFrame?: boolean; brokenNative?: boolean; staleContract?: boolean;
   mode?: 'http-error' | 'wrong-resource' | 'no-persistence';
 } = {}) {
   let saved = false, saves = 0, initialSaves = 0, navigations = 0;
@@ -117,6 +117,7 @@ export async function fixture(browser: Browser, game: Game, options: {
     await route.fulfill({ contentType: 'text/html', body: `<!doctype html><html><head><title>${game} fixture</title></head><body>
       <main><h1>${game}</h1>${saved ? '<a href="results/">See results</a>' : selectors[game]}
       ${options.hiddenResults && !saved ? '<a href="results/" hidden>See results</a>' : ''}</main>
+      ${options.hiddenFrame && !saved ? '<iframe hidden srcdoc="&lt;a href=&quot;results/&quot;&gt;See results&lt;/a&gt;"></iframe>' : ''}
       <script type="application/json">${source}</script><script>
       sessionStorage.setItem('fixtureNavigations', String(Number(sessionStorage.getItem('fixtureNavigations')||0)+1));
       for(const event of ['pointerdown','keydown','input']) document.addEventListener(event,e=>{

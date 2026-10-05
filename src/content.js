@@ -26,7 +26,6 @@
     const documents = [document];
     for (let index = 0; index < documents.length && index < 8; index++) {
       for (const frame of documents[index].querySelectorAll("iframe")) {
-        if (!visible(frame)) continue;
         try {
           const child = frame.contentDocument;
           if (child && !documents.includes(child)) documents.push(child);
@@ -37,7 +36,9 @@
   }
 
   function visible(el) {
-    return !!(el.getClientRects().length && getComputedStyle(el).visibility !== "hidden");
+    if (!el.getClientRects().length || getComputedStyle(el).visibility === "hidden") return false;
+    const frame = el.ownerDocument?.defaultView?.frameElement;
+    return !frame || visible(frame);
   }
 
   function completed() {

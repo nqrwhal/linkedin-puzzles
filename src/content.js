@@ -175,7 +175,8 @@
     }
     await delay(Math.max(0, 2000 - (Date.now() - startedAt)), url);
     const body = requests[game + "Save"](context.game, context.template, Date.now() - startedAt);
-    const response = await sendSave("https://www.linkedin.com/flagship-web/rsc-action/actions/server-request",
+    // SDUI routes the action by query parameter as well as the body requestId.
+    const response = await sendSave("https://www.linkedin.com/flagship-web/rsc-action/actions/server-request?sduiid=updateGameState",
       body, { "Content-Type": "application/json", "x-li-rsc-stream": "true" }, url);
     const path = requests.sduiResponse(await response.text());
     if (path !== `/games/${game}/results/`) throw new Error("Save response belongs to another game.");

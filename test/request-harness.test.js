@@ -35,5 +35,16 @@ test("capture correlates save responses and omits unrelated requests and credent
   assert.equal(log[1].status, 200);
   assert.match(log[2].postData, /END_SOLVED/);
   assert.doesNotMatch(JSON.stringify(log), /secret|private|123/);
+  await onEvent({ tabId: 11 }, "Network.requestWillBeSent", {
+    requestId: "sdui-save", request: {
+      method: "POST", url: "https://www.linkedin.com/flagship-web/rsc-action/actions/server-request?sduiid=updateGameState&parentSpanId=private&token=secret",
+      postData: '{"requestId":"updateGameState"}',
+      headers: { cookie: "private", "csrf-token": "secret" },
+    },
+  });
+  const sduiLog = await context.capturedRequests(11);
+  assert.equal(sduiLog.length, 1);
+  assert.equal(sduiLog[0].url, "https://www.linkedin.com/flagship-web/rsc-action/actions/server-request?sduiid=updateGameState");
+  assert.doesNotMatch(JSON.stringify(sduiLog), /secret|private|parentSpanId|headers/);
 });
 

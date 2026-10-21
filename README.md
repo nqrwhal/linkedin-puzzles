@@ -24,6 +24,8 @@ Pinpoint, Crossclimb, and Mini Sudoku use Voyager's game-save mutation with the 
 
 Queens, Tango, Zip, Patches, and Wend use the page's SDUI updateGameState contract. The extension captures the current document's native save, reads its delivered solution from React props, and changes the completion and board-state bindings. It preserves the remaining contract fields and uses milliseconds for SDUI elapsed time. Missing contracts or data stop the solve; no input fallback is attempted.
 
+The SDUI save URL includes `sduiid=updateGameState`, which LinkedIn requires to route the action. v0.8.2 fixes HTTP 400 failures caused by omitting this parameter. Diagnostic captures retain this routing identifier while excluding other query parameters except Voyager's `queryId`.
+
 The debugger permission reads game traffic, and scripting reads page-owned puzzle objects. No mouse or keyboard input is dispatched. Capture is bounded to fifteen minutes and released when leaving game pages. The extension only sends saves to LinkedIn.
 
 **Game capture** exposes local diagnostic records. Request headers are not logged; token fields and game-URN member components are redacted. Captures may still contain game-specific account identifiers, so review them before sharing. Captured replay contracts remain in memory for the current document and are cleared on navigation.

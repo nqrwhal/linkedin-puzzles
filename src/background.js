@@ -533,12 +533,16 @@ chrome.debugger.onEvent.addListener(async (source, method, params) => {
         }
       }
       const url = new URL(req.url);
-      const queryId = url.searchParams.get("queryId");
-      const endpoint = url.origin + url.pathname + (queryId ? `?queryId=${encodeURIComponent(queryId)}` : "");
+      // Retain routing identifiers for protocol diagnosis, omitting tracking and tokens.
+      const endpoint = new URL(url.origin + url.pathname);
+      for (const key of ["queryId", "sduiid"]) {
+        const value = url.searchParams.get(key);
+        if (value) endpoint.searchParams.set(key, value);
+      }
       if (!pendingSaveResponses.has(tabId)) pendingSaveResponses.set(tabId, new Set());
       pendingSaveResponses.get(tabId).add(params.requestId);
       recordSessionRequest(tabId, {
-        method: req.method, url: endpoint, requestId: params.requestId,
+        method: req.method, url: endpoint.href, requestId: params.requestId,
         postData: redactCapture(req.postData).slice(0, 30000),
       });
     }

@@ -69,6 +69,10 @@ export async function fixture(browser: Browser, game: Game, options: {
         json: { data: { data: { updateIdentityDashGames: { resourceKey: options.mode === 'wrong-resource' ? 'other' : urn } } } } });
     }
     if (method === 'POST' && /\/flagship-web\/rsc-action\/actions\/server-request/.test(url)) {
+      // LinkedIn rejects this endpoint without the action-routing query parameter.
+      if (new URL(url).searchParams.get('sduiid') !== 'updateGameState') {
+        return route.fulfill({ status: 400, body: '' });
+      }
       const body = JSON.parse(postData!);
       expect(body.requestId).toBe('updateGameState');
       expect(body.requestedArguments.payload.gameTypeId).toBe(ids[game]);
@@ -107,7 +111,7 @@ export async function fixture(browser: Browser, game: Game, options: {
       const lifecycle = {actions:[{$type:'proto.sdui.actions.core.SetState'},save]};
       const compile = input => {
         if(input.actions.length !== 1 || input.actions[0] !== save) throw Error('Whole lifecycle must never run');
-        return () => fetch('/flagship-web/rsc-action/actions/server-request', {
+        return () => fetch('/flagship-web/rsc-action/actions/server-request?sduiid=updateGameState', {
           method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(save.value)});
       };
       board.__reactFiber$fixture = {memoizedProps:{game:${JSON.stringify(delivered)},onDisappear:lifecycle},
